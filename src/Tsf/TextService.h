@@ -135,6 +135,8 @@ private:
     HRESULT ApplyDisplayAttribute(ITfContext* context, TfEditCookie editCookie, ITfRange* range,
                                   REFGUID attribute = GUID_TekitoDisplayAttribute);
     HRESULT EndComposition(TfEditCookie editCookie);
+    // Takes the display attribute off the composition's text.
+    void ClearCompositionUnderline(TfEditCookie editCookie);
     HRESULT InsertAtSelection(ITfContext* context, TfEditCookie editCookie,
                               const std::wstring& text);
     void RefreshCandidates(ITfContext* context, TfEditCookie editCookie);

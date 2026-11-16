@@ -719,6 +719,9 @@ HRESULT TextService::ShowJapanesePreedit(ITfContext* context, TfEditCookie editC
     if (!japanese_.IsComposing()) {
         candidateWindow_.Hide();
         if (composition_) {
+            // The underline off while it still has text to come off: once
+            // the text is gone, some browsers keep drawing it.
+            ClearCompositionUnderline(editCookie);
             const HRESULT hr = ReplaceComposition(context, editCookie, std::wstring{});
             if (FAILED(hr)) return hr;
         }

@@ -2054,6 +2054,9 @@ HRESULT TextService::HandleKeyInEditSessionCore(ITfContext* context, TfEditCooki
 
         if (!rawText_.empty()) rawText_.pop_back();
         if (rawText_.empty()) {
+            // The underline off while it still has text to come off: once
+            // the text is gone, some browsers keep drawing it.
+            ClearCompositionUnderline(editCookie);
             HRESULT hr = ReplaceComposition(context, editCookie, rawText_);
             if (FAILED(hr)) return hr;
             state_.Reset();
@@ -2352,6 +2355,17 @@ void TextService::NotePassedKey(WPARAM key) {
     }
 }
 
+void TextService::ClearCompositionUnderline(TfEditCookie editCookie) {
+    if (!composition_) return;
+    ComPtr<ITfRange> range;
+    ComPtr<ITfContext> context;
+    ComPtr<ITfProperty> attribute;
+    if (SUCCEEDED(composition_->GetRange(range.Put())) && SUCCEEDED(range->GetContext(context.Put())) &&
+        SUCCEEDED(context->GetProperty(GUID_PROP_ATTRIBUTE, attribute.Put()))) {
+        (void)attribute->Clear(editCookie, range.Get());
+    }
+}
+
 HRESULT TextService::EndComposition(TfEditCookie editCookie) {
     symbolComposition_ = false;
     if (!composition_) return S_OK;
@@ -2361,13 +2375,7 @@ HRESULT TextService::EndComposition(TfEditCookie editCookie) {
     composition->AddRef();
     // The underline goes with the composition: some apps (WordPad, Word)
     // keep a display attribute left on committed text.
-    ComPtr<ITfRange> range;
-    ComPtr<ITfContext> context;
-    ComPtr<ITfProperty> attribute;
-    if (SUCCEEDED(composition->GetRange(range.Put())) && SUCCEEDED(range->GetContext(context.Put())) &&
-        SUCCEEDED(context->GetProperty(GUID_PROP_ATTRIBUTE, attribute.Put()))) {
-        (void)attribute->Clear(editCookie, range.Get());
-    }
+    ClearCompositionUnderline(editCookie);
     HRESULT hr = composition->EndComposition(editCookie);
     if (composition_ == composition) {
         composition_->Release();

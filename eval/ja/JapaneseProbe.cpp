@@ -358,7 +358,10 @@ int main(int argc, char** argv) {
                 // The composition, its phrases apart with "|" when "phrases" is given.
                 std::wstring shown;
                 for (const auto& segment : composer.Segments()) shown += (showPhrases && !shown.empty() ? L"|" : L"") + segment.text;
-                std::cout << " " << Narrow(name) << ":" << Narrow(document) << "[" << Narrow(shown) << "]";
+                // "[]" with nothing in it but still composing: an empty
+                // composition the text service would keep open.
+                std::cout << " " << Narrow(name) << ":" << Narrow(document) << "[" << Narrow(shown) << "]"
+                          << (shown.empty() && composer.IsComposing() ? "(open)" : "");
             }
             std::cout << "\n";
         }
