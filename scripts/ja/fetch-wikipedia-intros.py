@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from datapacks import ROOT  # noqa: E402
 
 API = "https://ja.wikipedia.org/w/api.php"
-AGENT = "TEKITO-data-builder/1.0 (https://github.com/Canta360/tekito)"
+AGENT = "TEKITO-data-builder/1.0 (https://github.com/Capitata-dev/tekito)"
 BATCH = 20
 
 

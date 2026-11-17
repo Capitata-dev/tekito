@@ -987,7 +987,7 @@ function AboutPage({ settings, setSetting, runAction, version, runtime, packs, j
       <Card label={a.publisher}>
         <div className="publisher"><CapitataLogo className="capitata" /></div>
         <LinkRow icon="language" title="capitata.dev" external onClick={() => runAction("website.open", {})} />
-        <LinkRow icon="code" title="GitHub" description="github.com/Canta360/tekito" external onClick={() => runAction("feedback.open", { kind: "github" })} />
+        <LinkRow icon="code" title="GitHub" description="github.com/Capitata-dev/tekito" external onClick={() => runAction("feedback.open", { kind: "github" })} />
       </Card>
       <div className="footnote"><span>© 2026 Capitata</span></div>
 

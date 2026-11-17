@@ -191,9 +191,9 @@ struct AiModelInfo {
     unsigned long long bytes;
 };
 constexpr AiModelInfo kAiModels[] = {
-    {L"japanese-ai-light", L"https://github.com/Canta360/tekito/releases/download/ai-models-2/TEKITO-japanese-ai-light.zip",
+    {L"japanese-ai-light", L"https://github.com/Capitata-dev/tekito/releases/download/ai-models-2/TEKITO-japanese-ai-light.zip",
      "44A8FA9CD516DC169CC0F03449E946B299AE44C440C8EFB027128A834819DD04", 358021668ull},
-    {L"japanese-ai-strong", L"https://github.com/Canta360/tekito/releases/download/ai-models-2/TEKITO-japanese-ai-strong.zip",
+    {L"japanese-ai-strong", L"https://github.com/Capitata-dev/tekito/releases/download/ai-models-2/TEKITO-japanese-ai-strong.zip",
      "23EECE917B66F960BB7DE9FA44C6AA5CC78B49652B63BA7FE3B1256870E6FFFC", 1587553900ull},
 };
 // What runs them (TekitoAI.exe and ONNX Runtime, on the processor),
@@ -202,10 +202,10 @@ constexpr AiModelInfo kAiModels[] = {
 // chooses one and agrees to Microsoft's terms. Both also run Settings'
 // model (ai-models-2's copies do not, and are replaced).
 constexpr AiModelInfo kAiRuntime{
-    L"ai-runtime", L"https://github.com/Canta360/tekito/releases/download/ai-models-3/TEKITO-ai-runtime.zip",
+    L"ai-runtime", L"https://github.com/Capitata-dev/tekito/releases/download/ai-models-3/TEKITO-ai-runtime.zip",
     "AF216815E7B721890841A558D0F4F157DC67C6887F29817D72342482DC8ED6C5", 6380188ull};
 constexpr AiModelInfo kAiRuntimeWindowsMl{
-    L"ai-runtime", L"https://github.com/Canta360/tekito/releases/download/ai-models-3/TEKITO-ai-runtime-windows-ml.zip",
+    L"ai-runtime", L"https://github.com/Capitata-dev/tekito/releases/download/ai-models-3/TEKITO-ai-runtime-windows-ml.zip",
     "003B574CB4874F37415B29A3B214CC555032D27197702A10140DE8195DB3AE14", 18131689ull};
 
 tekito::userdata::AiModelInstallError DownloadAiPack(const AiModelInfo& pack, const std::filesystem::path& root);
@@ -214,7 +214,7 @@ tekito::userdata::AiModelInstallError DownloadAiPack(const AiModelInfo& pack, co
 // further): downloaded with the first conversion model, or by itself when
 // one is already there.
 constexpr AiModelInfo kSettingsAi{
-    L"settings-ai", L"https://github.com/Canta360/tekito/releases/download/ai-models-3/TEKITO-settings-ai.zip",
+    L"settings-ai", L"https://github.com/Capitata-dev/tekito/releases/download/ai-models-3/TEKITO-settings-ai.zip",
     "8099BB4BF9266F6C96EFBD875DAD28DE231E40A14220D62DFAA54CC621307FA8", 357791102ull};
 
 // Home's AI, asked how likely each text reads after what the user asked for
@@ -338,7 +338,7 @@ constexpr wchar_t kPostalCodePage[] = L"https://www.post.japanpost.jp/service/se
 // agrees to it in Settings: the copy on TEKITO's releases (kept current by
 // .github/workflows/postal-codes.yml), else Japan Post's own.
 constexpr const wchar_t* kPostalCodeZips[] = {
-    L"https://github.com/Canta360/tekito/releases/download/postal-codes/utf_ken_all.zip",
+    L"https://github.com/Capitata-dev/tekito/releases/download/postal-codes/utf_ken_all.zip",
     L"https://www.post.japanpost.jp/service/search/zipcode/download/utf/zip/utf_ken_all.zip",
 };
 constexpr DataPackInfo kDataPacks[] = {
@@ -2237,7 +2237,7 @@ private:
                 Reply(requestId, false, Text(L"That conversion is gone.", L"その変換はもうありません。"));
                 return;
             }
-            std::wstring url = L"https://github.com/Canta360/tekito/issues/new?template=wrong-conversion.yml";
+            std::wstring url = L"https://github.com/Capitata-dev/tekito/issues/new?template=wrong-conversion.yml";
             url += L"&reading=" + QueryEncoded(found->reading) + L"&got=" + QueryEncoded(found->text);
             const std::string_view version = TEKITO_VERSION_STRING;
             url += L"&mode=" + QueryEncoded(found->mode) +
@@ -2251,7 +2251,7 @@ private:
             // releases. Nothing is sent from here.
             const auto kind = message.String(L"kind");
             const std::string_view version = TEKITO_VERSION_STRING;
-            std::wstring url = L"https://github.com/Canta360/tekito";
+            std::wstring url = L"https://github.com/Capitata-dev/tekito";
             if (kind == L"bug") {
                 url += L"/issues/new?template=bug-report.yml&version=" +
                        QueryEncoded(std::wstring(version.begin(), version.end())) +
@@ -2603,9 +2603,12 @@ private:
             if (end > start) info.packs.push_back(packs.substr(start, end - start));
             start = end + 1;
         }
-        // Only TEKITO's releases, over HTTPS.
-        if (info.url.rfind(L"https://github.com/Canta360/tekito/releases/download/", 0) != 0 || info.sha256.size() != 64 ||
-            info.packs.empty()) {
+        // Only TEKITO's releases, over HTTPS. The repository moved from the
+        // Canta360 account to the Capitata-dev organization; a file written
+        // before the move names the old address, which GitHub forwards.
+        const bool fromRelease = info.url.starts_with(L"https://github.com/Capitata-dev/tekito/releases/download/") ||
+                                 info.url.starts_with(L"https://github.com/Canta360/tekito/releases/download/");
+        if (!fromRelease || info.sha256.size() != 64 || info.packs.empty()) {
             return std::nullopt;
         }
         return info;

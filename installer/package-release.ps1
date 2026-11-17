@@ -13,7 +13,7 @@ param(
     [string]$SourceDataRoot,
     [string]$OutputRoot,
     [string]$ArchivePath,
-    [string]$JapaneseDataBaseUrl = "https://github.com/Canta360/tekito/releases/download",
+    [string]$JapaneseDataBaseUrl = "https://github.com/Capitata-dev/tekito/releases/download",
     [switch]$ValidateOnly
 )
 
