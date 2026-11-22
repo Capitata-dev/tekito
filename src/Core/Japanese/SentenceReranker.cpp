@@ -100,14 +100,22 @@ bool SentenceReranker::Open(const std::filesystem::path& packDirectory) {
         return false;
     }
     const std::uint32_t vocab = header[1], embed = header[2], hidden = header[3], top = header[4];
-    if (vocab == 0 || embed == 0 || hidden == 0 || embed % 16 != 0 || hidden % 16 != 0 || top == 0 || top > 64) {
+    // Sizes a model of this kind has (and no product of them overflows).
+    if (vocab == 0 || vocab > (1u << 24) || embed == 0 || embed > 4096 || hidden == 0 || hidden > 4096 ||
+        embed % 16 != 0 || hidden % 16 != 0 || top == 0 || top > 64) {
         return false;
     }
     prior_.resize(top);
     if (!read(prior_.data(), top * sizeof(float))) return false;
+    // Once one section is not there whole, none after it is either: a pack
+    // cut short is turned away, whichever section it ends in.
+    bool cut = false;
     const auto section = [&](std::size_t bytes) -> const std::uint8_t* {
         at = (at + 63) / 64 * 64;
-        if (at + bytes > size) return nullptr;
+        if (cut || at > size || bytes > size - at) {
+            cut = true;
+            return nullptr;
+        }
         const std::uint8_t* start = data + at;
         at += bytes;
         return start;
@@ -122,7 +130,7 @@ bool SentenceReranker::Open(const std::filesystem::path& packDirectory) {
     const auto* bias = section(gates * sizeof(float));
     const auto* projection = section(std::size_t{embed} * hidden * sizeof(float));
     const auto* projectionBias = section(std::size_t{embed} * sizeof(float));
-    if (!projectionBias || at != size) return false;
+    if (cut || !projectionBias || at != size) return false;
     embedding_ = reinterpret_cast<const std::int8_t*>(embedding);
     embeddingScale_ = reinterpret_cast<const float*>(embeddingScale);
     inputWeights_ = reinterpret_cast<const std::int8_t*>(inputWeights);

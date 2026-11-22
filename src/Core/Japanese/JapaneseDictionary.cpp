@@ -19,7 +19,12 @@ bool Within(std::uint64_t offset, std::uint64_t bytes, std::uint64_t size) noexc
 }  // namespace
 
 bool JapaneseDictionary::Open(const std::filesystem::path& file) noexcept {
+    // Nothing kept of a file opened before: it is let go below.
     keyCount_ = 0;
+    reverse_ = chars_ = index_ = records_ = surfaces_ = nullptr;
+    charCount_ = 0;
+    recordsSize_ = surfaceUnits_ = 0;
+    added_.reset();
     if (!file_.Open(file)) return false;
     const std::uint8_t* p = file_.Data();
     const std::size_t size = file_.Size();
@@ -219,7 +224,7 @@ bool ConnectionMatrix::Open(const std::filesystem::path& file) noexcept {
     const std::uint32_t classesOffset = field(6);
     const std::uint32_t boundariesOffset = field(7);
     if (version != 1 || format != 1 || field(8) != size || matrixSize == 0 || matrixSize > 0xFFFF ||
-        scale == 0 || classCount == 0) {
+        scale == 0 || scale > (1u << 22) || classCount == 0) {
         return false;
     }
     const std::uint32_t rowBytes = (matrixSize + 7) / 8;

@@ -183,9 +183,15 @@ bool KanaSlips::Open(const std::filesystem::path& packDirectory) {
         at += bytes;
         return true;
     };
+    // Once one section is not there whole, none after it is either: a pack
+    // cut short is turned away, whichever section it ends in.
+    bool cut = false;
     const auto section = [&](std::size_t bytes) -> const std::uint8_t* {
         at = (at + 63) / 64 * 64;
-        if (at + bytes > size) return nullptr;
+        if (cut || at > size || bytes > size - at) {
+            cut = true;
+            return nullptr;
+        }
         const std::uint8_t* start = data + at;
         at += bytes;
         return start;
@@ -196,7 +202,10 @@ bool KanaSlips::Open(const std::filesystem::path& packDirectory) {
         return false;
     }
     const std::uint32_t chars = header[1], order = header[2], embed = header[3], hidden = header[4];
-    if (chars == 0 || chars > 128 || order == 0 || order > 4 || embed % 16 != 0 || hidden % 16 != 0) return false;
+    if (chars == 0 || chars > 128 || order == 0 || order > 4 || embed > 4096 || hidden > 4096 || embed % 16 != 0 ||
+        hidden % 16 != 0) {
+        return false;
+    }
     orders_.assign(order, {});
     for (auto& o : orders_) {
         std::uint32_t count = 0;
@@ -205,7 +214,7 @@ bool KanaSlips::Open(const std::filesystem::path& packDirectory) {
         o.codes = reinterpret_cast<const std::uint32_t*>(section(count * sizeof(std::uint32_t)));
         o.logProb = reinterpret_cast<const std::uint16_t*>(section(count * sizeof(std::uint16_t)));
         o.logBackoff = reinterpret_cast<const std::uint16_t*>(section(count * sizeof(std::uint16_t)));
-        if (!o.logBackoff) return false;
+        if (cut || !o.logBackoff) return false;
     }
     const std::size_t gates = 4 * std::size_t{hidden};
     embedding_ = reinterpret_cast<const float*>(section(std::size_t{chars} * embed * sizeof(float)));
@@ -217,7 +226,7 @@ bool KanaSlips::Open(const std::filesystem::path& packDirectory) {
     output_ = reinterpret_cast<const std::int8_t*>(section(std::size_t{chars} * hidden));
     outputScale_ = reinterpret_cast<const float*>(section(chars * sizeof(float)));
     outputBias_ = reinterpret_cast<const float*>(section(chars * sizeof(float)));
-    if (!outputBias_ || at != size) return false;
+    if (cut || !outputBias_ || at != size) return false;
 
     std::ifstream list(packDirectory / L"chars.tsv", std::ios::binary);
     if (!list) return false;

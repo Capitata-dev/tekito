@@ -171,13 +171,21 @@ std::vector<RomajiTable::Change> RomajiTable::ParseTable(const std::filesystem::
     if (!in) return rows;
     const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::wstring text;
-    if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFF && static_cast<unsigned char>(bytes[1]) == 0xFE) {
-        // UTF-16 little-endian, as Microsoft IME writes it.
+    const bool little = bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFF &&
+                        static_cast<unsigned char>(bytes[1]) == 0xFE;
+    const bool big = bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFE &&
+                     static_cast<unsigned char>(bytes[1]) == 0xFF;
+    if (little || big) {
+        // UTF-16, little-endian as Microsoft IME writes it, or big-endian.
+        const auto unit = [&](std::size_t at) -> char32_t {
+            const char32_t first = static_cast<unsigned char>(bytes[at]);
+            const char32_t second = static_cast<unsigned char>(bytes[at + 1]);
+            return little ? first | (second << 8) : (first << 8) | second;
+        };
         for (std::size_t i = 2; i + 1 < bytes.size(); i += 2) {
-            char32_t c = static_cast<unsigned char>(bytes[i]) | (static_cast<unsigned char>(bytes[i + 1]) << 8);
+            char32_t c = unit(i);
             if (c >= 0xD800 && c <= 0xDBFF && i + 3 < bytes.size()) {
-                const char32_t low = static_cast<unsigned char>(bytes[i + 2]) |
-                                     (static_cast<unsigned char>(bytes[i + 3]) << 8);
+                const char32_t low = unit(i + 2);
                 if (low >= 0xDC00 && low <= 0xDFFF) {
                     c = 0x10000 + ((c - 0xD800) << 10) + (low - 0xDC00);
                     i += 2;
