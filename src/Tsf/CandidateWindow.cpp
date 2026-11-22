@@ -874,6 +874,7 @@ void DrawLight(ID2D1RenderTarget* target, const D2D1_RECT_F& capsule, float scal
     if (peak <= 0.0f) return;
     const float radius = (capsule.bottom - capsule.top) / 2.0f;
     auto light = SolidBrush(target, WithAlpha(style.light, 1.0f));
+    if (!light) return;
     light->SetOpacity(peak);
     target->FillRoundedRectangle(Rounded(capsule, radius), light.get());
     const int spread = std::max(1, static_cast<int>(std::lround(kLightSpread * scale)));
@@ -1946,7 +1947,8 @@ private:
                                             static_cast<float>(height)),
                                 D2D1_ANTIALIAS_MODE_ALIASED);
         dc->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
-        draw(dc.get());
+        // No brush can be made: nothing is drawn with a null brush.
+        if (SolidBrush(dc.get(), D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f))) draw(dc.get());
         dc->PopAxisAlignedClip();
         return interop->EndDraw();
     }
@@ -2149,6 +2151,14 @@ private:
             target->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             target->BeginDraw();
             target->Clear(style_.palette.solid);
+            // No brush can be made (a lost device, no memory): nothing is
+            // drawn with a null brush, and the target is made again.
+            if (!SolidBrush(target, style_.palette.text)) {
+                (void)target->EndDraw();
+                hwndTarget_ = nullptr;
+                EndPaint(panel_, &ps);
+                return;
+            }
             if (frame_.selectedRow < frame_.rows.size()) {
                 DrawLight(target, layout_.RowRect(frame_.selectedRow), layout_.scale, style_);
             }

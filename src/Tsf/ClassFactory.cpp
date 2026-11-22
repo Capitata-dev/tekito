@@ -7,6 +7,10 @@
 
 namespace tekito::tsf {
 
+ClassFactory::ClassFactory() noexcept { ++g_objectCount; }
+
+ClassFactory::~ClassFactory() { --g_objectCount; }
+
 HRESULT ClassFactory::QueryInterface(REFIID riid, void** object) {
     if (!object) return E_INVALIDARG;
     *object = nullptr;
