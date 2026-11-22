@@ -653,6 +653,7 @@ private:
     // Letters after a capital stay letters; whether `key` was taken so.
     bool FeedAscii(wchar_t key);
     void TakeCasedWord();
+    [[nodiscard]] static std::wstring ForSentenceModel(std::wstring text);
     [[nodiscard]] bool HasAscii() const noexcept;
     // reading from `from` on, converted (letters after a capital as typed).
     [[nodiscard]] std::vector<Phrase> ConvertReading(const std::wstring& reading, std::size_t from,
@@ -905,6 +906,9 @@ private:
         std::wstring japanese;  // as Japanese
         // Its other conversions, for the sentence check (japanese first).
         std::vector<std::wstring> japaneseChoices;
+        // Its whole reading broken elsewhere (何|時ですか for 何|児ですか),
+        // read beside the others as Japanese mode's check reads them.
+        std::vector<std::wstring> japaneseWholes;
         bool isEnglish{false};
         bool marksOnly{false};  // punctuation of its own (a "." after English)
         bool locked{false};     // picked from the list or typed with capitals
