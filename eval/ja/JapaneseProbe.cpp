@@ -15,6 +15,7 @@
 #include "Core/Japanese/JapaneseComposer.h"
 #include "Core/Japanese/JapaneseData.h"
 #include "Core/Japanese/JapaneseKeys.h"
+#include "Core/Japanese/JapaneseLearning.h"
 #include "Core/Japanese/KanaText.h"
 #include "Core/Japanese/LanguageModel.h"
 #include "Core/Japanese/SentenceReranker.h"
@@ -296,11 +297,16 @@ int main(int argc, char** argv) {
     // handling (TranslateKey, ApplyKey) into a document, printed after each
     // key as the document then [the composition]. A capital is Shift and
     // the letter; {space} {enter} {s-enter} {bs} {esc} {left} {right} {f6}..{f10} are
-    // those keys (a plain space too).
+    // those keys (a plain space too); {pause} is typing stopping a moment (live
+// conversion converts again). "learned" prints, after each line, what
+// learning took from it (reading = text).
     if (std::find_if(argv + 3, argv + argc, [](const char* a) { return std::string(a) == "keys"; }) != argv + argc) {
         using Key = tekito::japanese::KeyPress::Key;
         const auto options = tekito::userdata::JapaneseKeyOptions(settings, mix);
         const bool showPhrases = std::find_if(argv + 3, argv + argc, [](const char* a) { return std::string(a) == "phrases"; }) != argv + argc;
+        const bool showLearned = std::find_if(argv + 3, argv + argc, [](const char* a) { return std::string(a) == "learned"; }) != argv + argc;
+        tekito::japanese::JapaneseLearningStore learning;
+        if (showLearned) composer.SetLearning(&learning);
         std::ifstream lines(argv[1], std::ios::binary);
         for (std::string line; std::getline(lines, line);) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -323,6 +329,13 @@ int main(int argc, char** argv) {
                         {L"{f8}", Key::F8}, {L"{f9}", Key::F9}, {L"{f10}", Key::F10}};
                     for (const auto& [text, key] : named) {
                         if (name == text) press.key = key;
+                    }
+                    if (name == L"{pause}") {
+                        (void)composer.RefineLive();
+                        std::wstring shown;
+                        for (const auto& segment : composer.Segments()) shown += segment.text;
+                        std::cout << " {pause}:" << Narrow(document) << "[" << Narrow(shown) << "]";
+                        continue;
                     }
                     if (name == L"{s-enter}") {
                         press.key = Key::Enter;
@@ -364,6 +377,12 @@ int main(int argc, char** argv) {
                           << (shown.empty() && composer.IsComposing() ? "(open)" : "");
             }
             std::cout << "\n";
+            if (showLearned) {
+                for (const auto& entry : learning.Entries()) {
+                    std::cout << "  learned: " << Narrow(entry.reading) << " = " << Narrow(entry.surface) << "\n";
+                }
+                learning.Clear();
+            }
         }
         return 0;
     }
