@@ -620,8 +620,12 @@ std::vector<Candidate> CandidateGenerator::Generate(std::wstring_view rawText,
     if (exactHasWeakFrequency && !keptAsTyped) {
         // A rare exact lexicon entry may be an obsolete/false-positive spelling.
         // Re-run the general typo search; no word-specific exception is used.
-        output.clear();
+        // What the user's own dictionary gives stays: it is not rare to them.
+        std::erase_if(output, [](const Candidate& candidate) {
+            return (candidate.sourceFlags & CandidateSourceUserDictionary) == 0;
+        });
         seen.clear();
+        for (const auto& candidate : output) seen.insert(candidate.text);
     }
 
     const auto addCompletions = [&]() {
@@ -662,9 +666,11 @@ std::vector<Candidate> CandidateGenerator::Generate(std::wstring_view rawText,
                               evidence.qwertyNeighbor,
                               entry,
                               std::wstring(misspelling.correction),
+                              // The words just before, as for every other
+                              // correction (the whole sentence matches no key).
                               {frequencyProvider_.Score(misspelling.correction),
                                options.contextSuggestionsEnabled
-                                   ? phraseProvider_.Score(misspelling.correction, context)
+                                   ? contextScore(misspelling.correction)
                                    : 0.0,
                                learningProvider_.Score(lower, Lower(misspelling.correction)),
                                options.contextSuggestionsEnabled
@@ -805,7 +811,14 @@ std::vector<Candidate> CandidateGenerator::Generate(std::wstring_view rawText,
                                 ? CandidatePolicySuggestOnly | CandidatePolicyContext
                                 : Offered(lower, entry.raw, CandidatePolicyCorrect);
         const auto sizeBefore = output.size();
-        AddUnique(output, seen, MatchCase(rawText, std::wstring(entry.raw)), SemanticLabel::None, false,
+        // A word from the user's dictionary keeps the capitals it was added
+        // with (a name stays a name).
+        const bool userCapitals = (entry.sourceFlags & CandidateSourceUserDictionary) != 0 &&
+                                  std::any_of(entry.candidate.begin(), entry.candidate.end(),
+                                              [](wchar_t c) { return std::iswupper(c) != 0; });
+        AddUnique(output, seen,
+                  userCapitals ? std::wstring(entry.candidate) : MatchCase(rawText, std::wstring(entry.raw)),
+                  SemanticLabel::None, false,
                   100.0 - static_cast<double>(correction.distance), false, policy,
                   sourceFlags, DictionaryEntryIdFor(entry, SemanticLabel::Original));
         if (output.size() != sizeBefore) ++addedCorrectionCount;

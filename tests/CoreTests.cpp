@@ -11,6 +11,7 @@
 #include "Core/RunTogether.h"
 #include "Core/SpaceBoundaryPolicy.h"
 #include "Core/SpellingVariants.h"
+#include "Core/SymSpellIndex.h"
 #include "Core/UserDictionary.h"
 #include "Core/UserLexiconProvider.h"
 #include "Core/UserLearning.h"
@@ -29,6 +30,7 @@
 #include "UserData/RuntimeModeState.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cwctype>
 #include <cstdlib>
@@ -1120,6 +1122,24 @@ void TestTypoModelBoundary() {
                                       {L"nginx", L"nine"}, {L"fcitx5", L"city5"}}) {
         Require(!tekito::IsPlausibleSlip(typed, word), "a word the dictionary lacks is not taken for another");
     }
+
+    // A doubled letter typed once costs what one typed twice does.
+    Require(std::abs(model.WeightedCost(L"bok", L"book") - model.WeightedCost(L"book", L"bok")) < 1e-9 &&
+                model.WeightedCost(L"bok", L"book") < model.WeightedCost(L"bok", L"bock"),
+            "a doubled letter typed once is a cheap slip");
+
+    // Two letters swapped are one edit, also in the fuzzy index.
+    Require(tekito::BoundedEditDistance("teh", "the", 2) == 1 && tekito::BoundedEditDistance("bacx", "abcd", 2) == 2 &&
+                tekito::BoundedEditDistance("abc", "xyz", 1) == 2,
+            "edit distance counts a swap of two letters as one");
+    tekito::SymSpellIndex index;
+    index.Build({"the", "abcd", "then"});
+    const auto finds = [&](std::string_view query, std::size_t distance, std::string_view word) {
+        const auto found = index.Lookup(query, distance);
+        return std::find(found.begin(), found.end(), word) != found.end();
+    };
+    Require(finds("teh", 1, "the") && finds("bacx", 2, "abcd") && !finds("bacx", 1, "abcd"),
+            "the fuzzy index finds a word with two letters swapped");
 }
 
 void TestTargetTextCandidateDiagnostics() {
@@ -2284,6 +2304,21 @@ void TestUserLexiconProviderBoundary() {
     const auto correctionBoundary = state.OnSpace();
     Require(correctionBoundary.text == L"name " && state.IsActive(),
             "User Dictionary correct policy accepts its candidate at Space");
+
+    // A slip in a word the user added is put right to it, in its capitals;
+    // a mapping's typed side (neme) is not a word to put slips right to.
+    tekito::UserDictionary words;
+    Require(words.Add({3, L"ammotrack", L"ammotrack"}) && words.Add({4, L"zentrix", L"Zentrix"}) &&
+                words.Add({5, L"neme", L"name", tekito::CandidatePolicyCorrect}),
+            "user words are added");
+    const tekito::UserLexiconProvider wordProvider(words);
+    const tekito::CandidateGenerator wordGenerator(wordProvider);
+    const auto offers = [&](std::wstring_view typed, std::wstring_view word) {
+        const auto found = wordGenerator.Generate(typed);
+        return std::any_of(found.begin(), found.end(), [&](const auto& candidate) { return candidate.text == word; });
+    };
+    Require(offers(L"ammotrak", L"ammotrack") && offers(L"zentirx", L"Zentrix") && !offers(L"nemo", L"neme"),
+            "a slip in a user word offers the word");
 }
 
 void TestUserDictionaryEngineConnection() {

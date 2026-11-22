@@ -181,35 +181,10 @@ bool StartsWith(std::string_view value, std::string_view prefix) {
     return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
 }
 
+// The same distance as the SymSpell index's, so a word is near the same way
+// whichever finds it.
 bool Near(std::string_view left, std::string_view right, std::size_t limit) {
-    if (left.size() > right.size() + limit || right.size() > left.size() + limit) return false;
-    constexpr std::size_t kStackColumns = 128;
-    std::array<std::size_t, kStackColumns> stackPrevious{};
-    std::array<std::size_t, kStackColumns> stackCurrent{};
-    std::vector<std::size_t> heapPrevious;
-    std::vector<std::size_t> heapCurrent;
-    auto* previous = stackPrevious.data();
-    auto* current = stackCurrent.data();
-    if (right.size() + 1 > kStackColumns) {
-        heapPrevious.resize(right.size() + 1);
-        heapCurrent.resize(right.size() + 1);
-        previous = heapPrevious.data();
-        current = heapCurrent.data();
-    }
-    for (std::size_t column = 0; column <= right.size(); ++column) previous[column] = column;
-    for (std::size_t row = 1; row <= left.size(); ++row) {
-        current[0] = row;
-        std::size_t best = current[0];
-        for (std::size_t column = 1; column <= right.size(); ++column) {
-            current[column] = std::min({current[column - 1] + 1, previous[column] + 1,
-                                        previous[column - 1] +
-                                            (left[row - 1] == right[column - 1] ? 0 : 1)});
-            best = std::min(best, current[column]);
-        }
-        if (best > limit) return false;
-        std::swap(previous, current);
-    }
-    return previous[right.size()] <= limit;
+    return BoundedEditDistance(left, right, limit) <= limit;
 }
 
 }  // namespace
