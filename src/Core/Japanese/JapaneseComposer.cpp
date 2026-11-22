@@ -1965,6 +1965,9 @@ void JapaneseComposer::BuildPhrasesFor(bool convert) {
     // Japanese mode's is (何時ですか, not 何児ですか).
     if (convert && reranker_ && (chunkJudge_ ? sentenceCheck_ : sentenceCheck_ || aiJudge_) && !reconverted_) CheckSentence();
     if (convert) ApplyNumberStyle();
+    // What the sentence check, a whole text or the AI chose shows first in
+    // its list, the others as they came: Space goes on from it.
+    if (convert) PutShownFirst();
     if (convert) AddVariantForms();
     if (convert) AddTypedForms();
 }
@@ -2700,6 +2703,16 @@ void JapaneseComposer::CheckSentence() {
     SelectStyledNumbers();
 }
 
+
+void JapaneseComposer::PutShownFirst() {
+    for (auto& phrase : phrases_) {
+        if (phrase.form || phrase.selected == 0 || phrase.selected >= phrase.candidates.size()) continue;
+        std::rotate(phrase.candidates.begin(), phrase.candidates.begin() + static_cast<std::ptrdiff_t>(phrase.selected),
+                    phrase.candidates.begin() + static_cast<std::ptrdiff_t>(phrase.selected) + 1);
+        phrase.selected = 0;
+        phrase.chosenByCheck = true;
+    }
+}
 
 void JapaneseComposer::TakeWritten(const std::wstring& text, std::span<const std::size_t> breaks) {
     if (SelectWritten(text)) return;
@@ -3590,6 +3603,26 @@ void JapaneseComposer::AddChunkCandidates(std::size_t i) {
             continue;
         }
         if ((digits(chunk) && !digits(text)) || narrow(text) == ownNarrow) continue;
+        // Nor one that writes its numbers otherwise only (3千円 for 3,000円):
+        // the number style writes them. Of two that differ so, the one that
+        // writes them as the phrase does.
+        const std::wstring asRead = ForSentenceModel(text);
+        if (asRead == ForSentenceModel(chunk)) continue;
+        const auto numbers = [](std::wstring_view t) {
+            std::wstring out;
+            for (const wchar_t c : t) {
+                if (IsDigit(c) || c == L',' || c == L'\xFF0C' ||
+                    std::wstring_view(L"〇一二三四五六七八九十百千万億兆").find(c) != std::wstring_view::npos) {
+                    out += c;
+                }
+            }
+            return out;
+        };
+        if (const auto same = std::find_if(found.begin(), found.end(), [&](const Found& f) { return ForSentenceModel(f.text) == asRead; });
+            same != found.end()) {
+            if (numbers(text) == numbers(chunk) && numbers(same->text) != numbers(chunk)) same->text = text;
+            continue;
+        }
         const std::wstring theirs = kanji(text);
         const bool written = within(theirs, ownKanji) || within(ownKanji, theirs);
         // Written another way: not in katakana the phrase is not in, nor all
@@ -4912,8 +4945,9 @@ void JapaneseComposer::SettleChunk() {
     while (word > 0 && std::wstring_view(L".,!?").find(keys[word - 1]) != std::wstring_view::npos) --word;
     chunk.keys = keys.substr(0, word);
     chunk.marksOnly = word == 0;
-    chunk.picked = PredictionChosen() ||
-                   std::any_of(phrases_.begin(), phrases_.end(), [](const PhraseState& p) { return p.selected != 0; });
+    chunk.picked = PredictionChosen() || std::any_of(phrases_.begin(), phrases_.end(), [](const PhraseState& p) {
+                       return p.selected != 0 || p.chosenByCheck;
+                   });
     chunk.locked = chunk.picked || TypedWithCapitals(chunk.keys).has_value();
     chunk.sentenceStart = sentenceStart_;
     // Both ways, for when the sentence judges the chunk again.

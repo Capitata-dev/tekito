@@ -647,6 +647,9 @@ private:
         int letterCase{0};
         // The list has been given what the keys mean with a slip undone.
         bool slipsAdded{false};
+        // The sentence check or the AI chose a candidate further down, now
+        // first (PutShownFirst): a Mix chunk keeps it on Enter, as one picked.
+        bool chosenByCheck{false};
         // The chunk candidates were looked for, as the list opened: not again
         // for each candidate picked after (the sentence shown then is another).
         bool chunksTried{false};
@@ -660,6 +663,9 @@ private:
     // Letters after a capital stay letters; whether `key` was taken so.
     bool FeedAscii(wchar_t key);
     void TakeCasedWord();
+    // Each phrase's candidate shown first in its list (after the sentence
+    // check or the AI chose it).
+    void PutShownFirst();
     // Whether letters typed after a capital end the word they spell as it is
     // written, `key` starting no English word after it (Zoom then d).
     [[nodiscard]] bool LettersWordDone(wchar_t key) const;
