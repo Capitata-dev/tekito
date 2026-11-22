@@ -339,7 +339,6 @@ ChunkJudge::Judgement ChunkJudge::JudgeLanguage(std::wstring_view keys, std::siz
         // the particle, unless written in capitals (PC, OK).
         const bool capitals = std::all_of(judgement.written.begin(), judgement.written.end(),
                                           [](wchar_t c) { return std::iswupper(c) != 0; });
-        const bool slip = slips_ && slips_->Convert(keys).has_value();
         if (const auto particle = SlipOfParticle(keys); englishBefore > 0 && !capitals && !particle.empty()) {
             judgement.meant = std::wstring(particle);
             return judgement;
@@ -372,7 +371,9 @@ ChunkJudge::Judgement ChunkJudge::JudgeLanguage(std::wstring_view keys, std::siz
         // In an English sentence, English Auto's spelling before a slip
         // that makes Japanese of it (check it tomorow: tomorrow, not ところ).
         if (englishBefore >= kEnglishSentence && !japaneseInSentence && spelled()) return judgement;
-        if (slip) return judgement;
+        // Undoing a slip costs much on long keys: only once it decides,
+        // and only whether it reads them.
+        if (slips_ && slips_->Convert(keys, 0, {}, nullptr, false).has_value()) return judgement;
         if (spelled()) return judgement;
         judgement.english = true;
         return judgement;
@@ -625,7 +626,7 @@ std::optional<std::vector<ChunkJudge::Piece>> ChunkJudge::Split(std::wstring_vie
     // English (jinkennypuraibashi-wo is 人権のプライバシーを, not JinKenny).
     constexpr std::int64_t kSlip = 6000;
     if (slips_) {
-        if (const auto corrected = slips_->Convert(keys)) {
+        if (const auto corrected = slips_->Convert(keys, 0, {}, nullptr, false)) {
             if (const auto cost = converter_.Cost(corrected->reading); cost && *best >= *cost + kSlip) {
                 return std::nullopt;
             }

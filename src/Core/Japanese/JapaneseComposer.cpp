@@ -5574,8 +5574,22 @@ bool JapaneseComposer::SingleVowelKana(std::wstring_view keys) const noexcept {
 }
 
 ChunkJudge::Judgement JapaneseComposer::JudgeChunk(std::wstring_view keys) const {
-    auto judged = chunkJudge_->Judge(keys, englishRun_, japaneseInSentence_, englishCorrection_ ? englishSpelling_ : nullptr, englishText_,
-                                     spacelessEnglish_);
+    const EnglishSpelling* spelling = englishCorrection_ ? englishSpelling_ : nullptr;
+    const auto same = [&](const JudgedKeys& j) {
+        return j.judge == chunkJudge_ && j.keys == keys && j.englishRun == englishRun_ &&
+               j.japaneseInSentence == japaneseInSentence_ && j.spelling == spelling && j.englishText == englishText_ &&
+               j.spaceless == spacelessEnglish_;
+    };
+    ChunkJudge::Judgement judged;
+    if (const auto found = std::find_if(judgedKeys_.begin(), judgedKeys_.end(), same); found != judgedKeys_.end()) {
+        judged = found->judged;
+    } else {
+        judged = chunkJudge_->Judge(keys, englishRun_, japaneseInSentence_, spelling, englishText_, spacelessEnglish_);
+        constexpr std::size_t kRemembered = 8;
+        if (judgedKeys_.size() >= kRemembered) judgedKeys_.erase(judgedKeys_.begin());
+        judgedKeys_.push_back({std::wstring(keys), englishRun_, japaneseInSentence_, spelling, englishText_, spacelessEnglish_,
+                               chunkJudge_, judged});
+    }
     if (judged.english && SingleVowelKana(keys)) {
         // The letter is the next choice (either).
         judged.english = false;

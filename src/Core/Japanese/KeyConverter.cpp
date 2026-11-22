@@ -9,6 +9,7 @@
 #include <limits>
 #include <set>
 #include <tuple>
+#include <unordered_set>
 
 namespace tekito::japanese {
 namespace {
@@ -117,7 +118,7 @@ void SlipsAt(std::wstring_view typed, std::size_t at, bool consonants, bool vowe
 
 std::optional<KeyConversion> KeyConverter::Convert(std::wstring_view keys, std::uint16_t context,
                                                    std::span<const std::wstring> contextWords,
-                                                   const JapaneseUserDictionary* user) const {
+                                                   const JapaneseUserDictionary* user, bool phrases) const {
     const std::size_t n = keys.size();
     if (n < kShortestKeys || costs_.typo <= 0) return std::nullopt;
     // A slip in a word starting at key `at`: dearer early, cheaper late.
@@ -155,13 +156,32 @@ std::optional<KeyConversion> KeyConverter::Convert(std::wstring_view keys, std::
     // kana, kNoKey inside a unit). Corrected words must be at least
     // `shortest` kana long (to take in the slip); each is added once, in its
     // likeliest forms only.
+    // With one code for each character, a key's record names its kana: the
+    // record, not the kana, says which word it is (a set of numbers, not of
+    // strings, for the thousands of words a long input tries).
+    struct Correction {
+        std::size_t begin, end;
+        std::uint32_t record;
+        bool operator==(const Correction&) const = default;
+    };
+    struct CorrectionHash {
+        std::size_t operator()(const Correction& c) const noexcept {
+            return std::hash<std::uint64_t>{}((static_cast<std::uint64_t>(c.record) << 32) ^ (static_cast<std::uint64_t>(c.begin) << 16) ^
+                                              c.end);
+        }
+    };
+    const bool byRecord = dictionary_.OneCodeEachCharacter();
+    std::unordered_set<Correction, CorrectionHash> correctionRecords;
     std::set<std::tuple<std::size_t, std::size_t, std::wstring>> corrections;
     const auto addWords = [&](std::size_t i, const std::wstring& kana, const std::vector<std::size_t>& keyAfter,
                               bool corrected, std::size_t shortest, std::int64_t slipCost = 0) {
         dictionary_.CommonPrefixSearch(dictionary_.Encode(kana), [&](std::size_t length, std::uint32_t record) {
             const std::size_t end = keyAfter[length];
             if (end == kNoKey || length < shortest) return;
-            if (corrected && !corrections.insert({i, end, kana.substr(0, length)}).second) return;
+            if (corrected && (byRecord ? !correctionRecords.insert({i, end, record}).second
+                                       : !corrections.insert({i, end, kana.substr(0, length)}).second)) {
+                return;
+            }
             std::size_t forms = 0;
             dictionary_.ForEachWord(record, [&](const DictionaryWord& word) {
                 add({static_cast<std::uint32_t>(i), static_cast<std::uint32_t>(end), word.left, word.right,
@@ -362,7 +382,7 @@ std::optional<KeyConversion> KeyConverter::Convert(std::wstring_view keys, std::
         offset += nodes[k].text.size();
         result.keyAt[offset] = nodes[k].end;
     }
-    result.phrases = converter_.Convert(result.reading, {}, context, contextWords, user);
+    if (phrases) result.phrases = converter_.Convert(result.reading, {}, context, contextWords, user);
     return result;
 }
 

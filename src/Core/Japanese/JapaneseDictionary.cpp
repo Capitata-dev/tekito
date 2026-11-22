@@ -23,6 +23,10 @@ bool JapaneseDictionary::Open(const std::filesystem::path& file) noexcept {
     keyCount_ = 0;
     reverse_ = chars_ = index_ = records_ = surfaces_ = nullptr;
     charCount_ = 0;
+    firstRanges_.clear();
+    secondRanges_.clear();
+    secondStart_.clear();
+    oneCodeEach_ = false;
     recordsSize_ = surfaceUnits_ = 0;
     added_.reset();
     if (!file_.Open(file)) return false;
@@ -61,7 +65,55 @@ bool JapaneseDictionary::Open(const std::filesystem::path& file) noexcept {
     surfaceUnits_ = surfaceUnits;
     unknownId_ = static_cast<std::uint16_t>(unknownId);
     keyCount_ = keyCount;
+    std::array<bool, 256> used{};
+    oneCodeEach_ = true;
+    for (std::size_t c = 0; c < 65536 && oneCodeEach_; ++c) {
+        const std::uint8_t code = reverse_[c];
+        if (code == 0) continue;
+        oneCodeEach_ = !used[code];
+        used[code] = true;
+    }
+    // Without memory for them, the searches narrow all the keys.
+    try {
+        MakeStartRanges();
+    } catch (...) {
+        firstRanges_.clear();
+        secondRanges_.clear();
+        secondStart_.clear();
+    }
     return true;
+}
+
+void JapaneseDictionary::MakeStartRanges() {
+    firstRanges_.clear();
+    secondRanges_.clear();
+    secondStart_.clear();
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> first(256, {0, 0});
+    std::vector<std::vector<SecondRange>> second(256);
+    ReadingCodesView before;
+    for (std::uint32_t record = 0; record < keyCount_; ++record) {
+        const ReadingCodesView key = Key(record);
+        // Out of order, or a key a search would not find as such: the
+        // searches narrow all the keys, as they always did.
+        if (key.empty() || (record > 0 && !std::lexicographical_compare(before.begin(), before.end(), key.begin(), key.end()))) {
+            return;
+        }
+        before = key;
+        auto& range = first[key[0]];
+        if (range.first == range.second) range.first = record;
+        range.second = record + 1;
+        if (key.size() < 2) continue;
+        auto& seconds = second[key[0]];
+        if (seconds.empty() || seconds.back().code != key[1]) seconds.push_back({key[1], record, record});
+        seconds.back().end = record + 1;
+    }
+    secondStart_.reserve(257);
+    for (std::size_t code = 0; code < 256; ++code) {
+        secondStart_.push_back(static_cast<std::uint32_t>(secondRanges_.size()));
+        secondRanges_.insert(secondRanges_.end(), second[code].begin(), second[code].end());
+    }
+    secondStart_.push_back(static_cast<std::uint32_t>(secondRanges_.size()));
+    firstRanges_ = std::move(first);
 }
 
 bool JapaneseDictionary::AddWords(const std::filesystem::path& file) {

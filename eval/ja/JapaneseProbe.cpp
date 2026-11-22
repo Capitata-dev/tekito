@@ -30,11 +30,13 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -305,6 +307,9 @@ int main(int argc, char** argv) {
         const auto options = tekito::userdata::JapaneseKeyOptions(settings, mix);
         const bool showPhrases = std::find_if(argv + 3, argv + argc, [](const char* a) { return std::string(a) == "phrases"; }) != argv + argc;
         const bool showLearned = std::find_if(argv + 3, argv + argc, [](const char* a) { return std::string(a) == "learned"; }) != argv + argc;
+        // "timing": how long each key took (its handling and what is shown
+        // after it), in milliseconds, after the line.
+        const bool timing = std::find_if(argv + 3, argv + argc, [](const char* a) { return std::string(a) == "timing"; }) != argv + argc;
         tekito::japanese::JapaneseLearningStore learning;
         if (showLearned) composer.SetLearning(&learning);
         std::ifstream lines(argv[1], std::ios::binary);
@@ -316,7 +321,9 @@ int main(int argc, char** argv) {
             std::wstring document;
             std::cout << line << "\n ";
             const std::wstring keys = Widen(line);
+            std::vector<double> took;
             for (std::size_t i = 0; i < keys.size(); ++i) {
+                const auto started = std::chrono::steady_clock::now();
                 tekito::japanese::KeyPress press;
                 std::wstring name(1, keys[i]);
                 if (keys[i] == L'{') {
@@ -334,6 +341,7 @@ int main(int argc, char** argv) {
                         (void)composer.RefineLive();
                         std::wstring shown;
                         for (const auto& segment : composer.Segments()) shown += segment.text;
+                        took.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
                         std::cout << " {pause}:" << Narrow(document) << "[" << Narrow(shown) << "]";
                         continue;
                     }
@@ -371,12 +379,21 @@ int main(int argc, char** argv) {
                 // The composition, its phrases apart with "|" when "phrases" is given.
                 std::wstring shown;
                 for (const auto& segment : composer.Segments()) shown += (showPhrases && !shown.empty() ? L"|" : L"") + segment.text;
+                took.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
                 // "[]" with nothing in it but still composing: an empty
                 // composition the text service would keep open.
                 std::cout << " " << Narrow(name) << ":" << Narrow(document) << "[" << Narrow(shown) << "]"
                           << (shown.empty() && composer.IsComposing() ? "(open)" : "");
             }
             std::cout << "\n";
+            if (timing && !took.empty()) {
+                double total = 0;
+                for (const double ms : took) total += ms;
+                std::cout << "  timing: total " << std::fixed << std::setprecision(1) << total << " ms, slowest "
+                          << *std::max_element(took.begin(), took.end()) << " ms, keys:";
+                for (const double ms : took) std::cout << " " << ms;
+                std::cout << std::defaultfloat << "\n";
+            }
             if (showLearned) {
                 for (const auto& entry : learning.Entries()) {
                     std::cout << "  learned: " << Narrow(entry.reading) << " = " << Narrow(entry.surface) << "\n";

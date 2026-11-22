@@ -953,6 +953,20 @@ private:
     [[nodiscard]] std::optional<std::wstring> TypedWithCapitals(std::wstring_view keys) const;
     // The chunk judge's judgement of `keys`, with SetSingleVowelKana.
     [[nodiscard]] ChunkJudge::Judgement JudgeChunk(std::wstring_view keys) const;
+    // The chunk judge's last judgements, by all it was given: the text and
+    // the caret shown after a key each ask for the same keys, and judging
+    // long keys costs much.
+    struct JudgedKeys {
+        std::wstring keys;
+        std::size_t englishRun;
+        bool japaneseInSentence;
+        const EnglishSpelling* spelling;
+        std::wstring englishText;
+        bool spaceless;
+        const ChunkJudge* judge;
+        ChunkJudge::Judgement judged;
+    };
+    mutable std::vector<JudgedKeys> judgedKeys_;
     // A chunk that reads both ways takes the language the user chose for
     // it before (learning: game picked as English over げめ, or 褒め over
     // home), when that was learned.
