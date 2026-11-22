@@ -228,6 +228,7 @@ private:
     // as Enter would convert it.
     // Shows the text again when it changes by itself (display delays).
     void ScheduleJapaneseRedisplay();
+    void StopJapaneseRedisplay();
     static void CALLBACK OnJapaneseRedisplayTimer(HWND, UINT, UINT_PTR id, DWORD);
     UINT_PTR redisplayTimer_{0};
     void ScheduleJapaneseRefine();

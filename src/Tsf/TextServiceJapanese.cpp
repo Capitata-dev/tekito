@@ -624,12 +624,19 @@ thread_local TextService* redisplayOwner = nullptr;
 void TextService::ScheduleJapaneseRedisplay() {
     const auto next = japanese_.IsComposing() ? japanese_.NextDisplayChange() : std::nullopt;
     if (!next) {
-        if (redisplayTimer_) KillTimer(nullptr, redisplayTimer_);
-        redisplayTimer_ = 0;
+        StopJapaneseRedisplay();
         return;
     }
     redisplayOwner = this;
     redisplayTimer_ = SetTimer(nullptr, redisplayTimer_, std::max<UINT>(*next, USER_TIMER_MINIMUM), &TextService::OnJapaneseRedisplayTimer);
+}
+
+// The timer stops with the text service: a thread timer outlives it, and its
+// callback would reach a text service that is gone.
+void TextService::StopJapaneseRedisplay() {
+    if (redisplayTimer_) KillTimer(nullptr, redisplayTimer_);
+    redisplayTimer_ = 0;
+    if (redisplayOwner == this) redisplayOwner = nullptr;
 }
 
 void CALLBACK TextService::OnJapaneseRedisplayTimer(HWND, UINT, UINT_PTR id, DWORD) {

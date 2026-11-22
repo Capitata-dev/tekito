@@ -634,6 +634,7 @@ HRESULT TextService::Deactivate() {
     Trace(L"Deactivate");
     CancelJapaneseRefine();
     StopWatchingAiAnswer();
+    StopJapaneseRedisplay();
     if (settingsLoaded_) SyncRuntimeState();
     if (settingsLoaded_) {
         userdata::UserSettings latestSettings = userSettings_;
