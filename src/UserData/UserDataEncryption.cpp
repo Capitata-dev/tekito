@@ -236,7 +236,12 @@ std::string NormalizeCode(std::string_view code) {
 
 // The key that wraps the data key, from the code (Argon2id).
 std::optional<DataKey> CodeKey(const std::string& code, const KeyFile& file) {
-    if (file.blocks < 8 || file.blocks > (1u << 20) || file.passes < 1 || file.passes > 16) return std::nullopt;
+    // The cost TEKITO writes, or up to four times it: the key file is not
+    // trusted to make the work much cheaper, or long enough to stall.
+    if (file.blocks < kArgonBlocks || file.blocks > 4 * kArgonBlocks || file.passes < kArgonPasses ||
+        file.passes > 2 * kArgonPasses) {
+        return std::nullopt;
+    }
     std::unique_ptr<std::uint8_t[]> work(new (std::nothrow) std::uint8_t[static_cast<std::size_t>(file.blocks) * 1024]);
     if (!work) return std::nullopt;
     DataKey key{};
@@ -379,6 +384,15 @@ std::string JournalMode(sqlite3* connection, const char* pragma) {
 }
 
 }  // namespace
+
+DatabaseOpening::DatabaseOpening() {
+    auto* lock = new (std::nothrow) std::optional<KeyFileLock>();
+    if (!lock) return;
+    lock->emplace(kOpenWait);
+    lock_ = lock;
+}
+
+DatabaseOpening::~DatabaseOpening() { delete static_cast<std::optional<KeyFileLock>*>(lock_); }
 
 std::filesystem::path UserKeyPath(const std::filesystem::path& database) {
     auto path = database;
@@ -605,7 +619,8 @@ bool RescueDatabase(const std::filesystem::path& database, const std::filesystem
     // Read from a copy (with its log), never the original.
     wchar_t folder[MAX_PATH]{};
     GetTempPathW(MAX_PATH, folder);
-    const auto copy = std::filesystem::path(folder) / (L"tekito-rescue-" + std::to_wstring(GetCurrentProcessId()) + L".db");
+    const auto copy = std::filesystem::path(folder) / (L"tekito-rescue-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+                                                       std::to_wstring(GetTickCount64()) + L".db");
     auto copyWal = copy;
     copyWal += L"-wal";
     auto shm = copy;

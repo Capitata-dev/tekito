@@ -178,23 +178,28 @@ bool SqliteUserDictionaryRepository::Open() noexcept {
     // Encrypted or plain as the user asked, when no other process has it
     // open; then opened with its key when it is encrypted (or new and to be).
     SettleEncryption(databasePath_);
-    std::error_code error;
-    const bool fresh = !std::filesystem::is_regular_file(databasePath_, error) ||
-                       std::filesystem::file_size(databasePath_, error) == 0;
-    const bool locked = fresh ? EncryptionWanted(databasePath_) : DatabaseEncrypted(databasePath_);
-    sqlite3* database = nullptr;
-    if (sqlite3_open16(databasePath_.c_str(), &database) != SQLITE_OK ||
-        (locked && !UnlockDatabase(database, databasePath_))) {
-        if (database) sqlite3_close(database);
-        return false;
+    {
+        // Opened (the file held, by the first statement) while no change of
+        // its encryption can begin in another process.
+        const DatabaseOpening opening;
+        std::error_code error;
+        const bool fresh = !std::filesystem::is_regular_file(databasePath_, error) ||
+                           std::filesystem::file_size(databasePath_, error) == 0;
+        const bool locked = fresh ? EncryptionWanted(databasePath_) : DatabaseEncrypted(databasePath_);
+        sqlite3* database = nullptr;
+        if (sqlite3_open16(databasePath_.c_str(), &database) != SQLITE_OK ||
+            (locked && !UnlockDatabase(database, databasePath_))) {
+            if (database) sqlite3_close(database);
+            return false;
+        }
+        database_ = database;
+        // Every application with TEKITO open shares this file; when two save at
+        // once, the second waits briefly instead of losing what it had to save.
+        sqlite3_busy_timeout(database_, kBusyTimeoutMs);
+        // Write-ahead logging: reading never waits for a save, and saves wait
+        // only for each other (the mode stays with the file).
+        sqlite3_exec(database_, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;", nullptr, nullptr, nullptr);
     }
-    database_ = database;
-    // Every application with TEKITO open shares this file; when two save at
-    // once, the second waits briefly instead of losing what it had to save.
-    sqlite3_busy_timeout(database_, kBusyTimeoutMs);
-    // Write-ahead logging: reading never waits for a save, and saves wait
-    // only for each other (the mode stays with the file).
-    sqlite3_exec(database_, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;", nullptr, nullptr, nullptr);
     if (!EnsureSchema()) {
         Close();
         return false;
