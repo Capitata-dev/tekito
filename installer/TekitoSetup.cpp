@@ -922,13 +922,16 @@ std::wstring FailureMessage(int code, const std::filesystem::path& log) {
     case 21: return Tr(L"The downloaded Japanese data was not the file this installer expects. Try again, or download the latest TEKITO.", L"ダウンロードした日本語データが、このインストーラーの想定と一致しません。もう一度お試しいただくか、最新の TEKITO をダウンロードしてください。");
     default:
         if (UseJapanese()) {
+            // Part of TEKITO may already be in place (the program, its
+            // registration, before Installed apps lists it): setup run again
+            // puts it in place whole.
             return L"インストールがエラー " + std::to_wstring(code) +
-                   L" で停止しました。新規インストールの場合、変更は残っていません。もう一度お試しください。" +
+                   L" で停止しました。途中まで入った TEKITO は、もう一度セットアップを実行すると入れ直されます。" +
                    (log.empty() ? std::wstring() : L"繰り返し起きる場合は、" + log.wstring() + L" に詳しい記録があります。");
         }
         return L"The install step stopped with error " + std::to_wstring(code) +
-               L". If this was a new install, nothing was left behind. Try again" +
-               (log.empty() ? std::wstring(L".") : L"; if it keeps happening, " + log.wstring() + L" says why.");
+               L". Part of TEKITO may already be installed; running setup again installs it whole" +
+               (log.empty() ? std::wstring(L".") : L". If it keeps happening, " + log.wstring() + L" says why.");
     }
 }
 
