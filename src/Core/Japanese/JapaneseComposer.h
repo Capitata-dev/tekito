@@ -666,6 +666,8 @@ private:
     // Each phrase's candidate shown first in its list (after the sentence
     // check or the AI chose it).
     void PutShownFirst();
+    // A list's first page for words (TidyFirstPage's own comment says how).
+    void TidyFirstPage(PhraseState& phrase) const;
     // Whether letters typed after a capital end the word they spell as it is
     // written, `key` starting no English word after it (Zoom then d).
     [[nodiscard]] bool LettersWordDone(wchar_t key) const;

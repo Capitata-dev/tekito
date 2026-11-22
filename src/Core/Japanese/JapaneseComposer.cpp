@@ -1970,6 +1970,9 @@ void JapaneseComposer::BuildPhrasesFor(bool convert) {
     if (convert) PutShownFirst();
     if (convert) AddVariantForms();
     if (convert) AddTypedForms();
+    if (convert) {
+        for (auto& phrase : phrases_) TidyFirstPage(phrase);
+    }
 }
 
 namespace {
@@ -2404,6 +2407,7 @@ void JapaneseComposer::AddTypedForms() {
             if (kept != candidates.end()) phrase.selected = static_cast<std::size_t>(kept - candidates.begin());
             continue;
         }
+        for (auto& form : tail) form.group = PhraseCandidate::Group::Typed;
         candidates.insert(candidates.end(), std::make_move_iterator(tail.rbegin()), std::make_move_iterator(tail.rend()));
         const auto kept = std::find_if(candidates.begin(), candidates.end(),
                                        [&](const PhraseCandidate& c) { return c.text == chosen; });
@@ -2712,6 +2716,84 @@ void JapaneseComposer::PutShownFirst() {
         phrase.selected = 0;
         phrase.chosenByCheck = true;
     }
+}
+
+void JapaneseComposer::TidyFirstPage(PhraseState& phrase) const {
+    // The first page goes to words: one date or time, one symbol or emoji,
+    // and words with only their first kana apart (は死, よろ敷く: what the
+    // reading starts with, then another word) after the others; those move
+    // to the start of the second page, in their order. What shows stays
+    // first. Nothing leaves the list.
+    auto& list = phrase.candidates;
+    if (phrase.form || phrase.selected != 0 || list.size() <= pageSize_ || pageSize_ < 3) return;
+    // Words the dictionary has for the reading as they are (この間, その後)
+    // are words, not pieces.
+    std::vector<std::wstring> words;
+    if (converter_ && phrase.begin + phrase.length <= conversionReading_.size()) {
+        for (const auto& word : converter_->Words(std::wstring_view(conversionReading_).substr(phrase.begin, phrase.length))) {
+            words.push_back(word.text);
+        }
+    }
+    const auto hiragana = [](wchar_t c) { return c >= 0x3041 && c <= 0x3096; };
+    const auto kanji = [](wchar_t c) { return (c >= 0x4E00 && c <= 0x9FFF) || c == 0x3005; };
+    const auto pieceOfWords = [&](const PhraseCandidate& c) {
+        if (c.kind != PhraseCandidate::Kind::Dictionary || c.name || c.setPhrase || c.chunk || c.length != 0 || c.text.size() < 2 ||
+            std::find(words.begin(), words.end(), c.text) != words.end() ||
+            !hiragana(c.text[0]) || std::wstring_view(L"おごみ").find(c.text[0]) != std::wstring_view::npos) {
+            return false;
+        }
+        std::size_t kana = 0;
+        while (kana < c.text.size() && hiragana(c.text[kana])) ++kana;
+        return kana < c.text.size() && kanji(c.text[kana]);
+    };
+    // A symbol or emoji, from the symbols or from the dictionary (⛲️, ∠):
+    // nothing in it that writes words.
+    const auto symbolic = [](const PhraseCandidate& c) {
+        return c.group == PhraseCandidate::Group::Symbol ||
+               (!c.text.empty() && std::none_of(c.text.begin(), c.text.end(), [](wchar_t ch) {
+                   return std::iswalnum(ch) != 0 || (ch >= 0x3041 && ch <= 0x30FF) || (ch >= 0x4E00 && ch <= 0x9FFF) ||
+                          (ch >= 0xFF10 && ch <= 0xFF5A) || ch == 0x3005;
+               }));
+    };
+    // The next symbols, three at most, start the second page; the forms of
+    // what was typed stay at the end.
+    constexpr std::size_t kSecondPageSymbols = 3;
+    bool date = false;
+    std::size_t symbols = 0;
+    std::vector<PhraseCandidate> first{std::move(list[0])}, later, rest, typed;
+    for (std::size_t i = 1; i < list.size(); ++i) {
+        auto& c = list[i];
+        if (c.group == PhraseCandidate::Group::Typed) {
+            typed.push_back(std::move(c));
+            continue;
+        }
+        bool down = false;
+        bool rather = false;  // down, but not to the second page's start
+        if (c.group == PhraseCandidate::Group::Date) {
+            down = date;
+            date = true;
+        } else if (symbolic(c)) {
+            down = symbols > 0;
+            rather = symbols > kSecondPageSymbols;
+            ++symbols;
+        } else {
+            down = pieceOfWords(c);
+        }
+        if (first.size() < pageSize_ && !down) {
+            first.push_back(std::move(c));
+        } else if (first.size() < pageSize_ && !rather) {
+            later.push_back(std::move(c));
+        } else {
+            rest.push_back(std::move(c));
+        }
+    }
+    // Too few words to fill the page: those moved down fill it, in order.
+    std::size_t moved = 0;
+    while (first.size() < pageSize_ && moved < later.size()) first.push_back(std::move(later[moved++]));
+    list = std::move(first);
+    for (std::size_t i = moved; i < later.size(); ++i) list.push_back(std::move(later[i]));
+    for (auto& c : rest) list.push_back(std::move(c));
+    for (auto& c : typed) list.push_back(std::move(c));
 }
 
 void JapaneseComposer::TakeWritten(const std::wstring& text, std::span<const std::size_t> breaks) {
@@ -3820,11 +3902,13 @@ void JapaneseComposer::AddSpecial(std::wstring_view reading, std::vector<PhraseC
     const auto has = [&](const std::wstring& text) {
         return std::any_of(candidates.begin(), candidates.end(), [&](const PhraseCandidate& c) { return c.text == text; });
     };
+    auto group = PhraseCandidate::Group::Word;
     const auto insert = [&](std::size_t at, const std::vector<std::wstring>& texts, std::wstring_view suffix) {
         at = std::min(at, candidates.size());
         for (const auto& text : texts) {
             PhraseCandidate candidate{text + std::wstring(suffix), candidates.front().cost,
                                       PhraseCandidate::Kind::Special, false};
+            candidate.group = group;
             if (has(candidate.text)) continue;
             candidates.insert(candidates.begin() + static_cast<std::ptrdiff_t>(at++), std::move(candidate));
         }
@@ -3948,7 +4032,9 @@ void JapaneseComposer::AddSpecial(std::wstring_view reading, std::vector<PhraseC
             }
             auto dates = special_->Dates(SpecialConversions::Language::Japanese, reading.substr(0, length), now);
             if (dates.empty()) continue;
+            group = PhraseCandidate::Group::Date;
             insert(1, dates, suffix);
+            group = PhraseCandidate::Group::Word;
             break;
         }
     }
@@ -3957,8 +4043,10 @@ void JapaneseComposer::AddSpecial(std::wstring_view reading, std::vector<PhraseC
     // Symbols and emoticons after them ("やじるし": 矢印, やじるし, ヤジルシ, →).
     if (specialOptions_.symbols) {
         const std::size_t symbolsFrom = candidates.size();
+        group = PhraseCandidate::Group::Symbol;
         insert(candidates.size(), special_->Symbols(SpecialConversions::Language::Japanese, reading), {});
         insert(candidates.size(), special_->Emoticons(reading), {});
+        group = PhraseCandidate::Group::Word;
         // The reading's first symbol on the first page, after the words read
         // the same: its symbol when it names one (まる: ○, やじるし: →,
         // おんぷ: ♪), otherwise its most used emoji (わらい: 😂). The pack
@@ -4108,6 +4196,8 @@ void JapaneseComposer::Convert() {
         AddLongerWords(focus_);
         auto& phrase = phrases_[focus_];
         AddSlipCandidates(phrase);
+        // Its first page for words again, with what joined it.
+        TidyFirstPage(phrase);
         phrase.form.reset();
         if (phrase.candidates.empty()) return;
         // The slips just added may come before the whole input's reading.

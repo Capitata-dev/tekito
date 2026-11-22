@@ -68,6 +68,11 @@ struct PhraseCandidate {
     // the sentences the sentence check read (JapaneseComposer's chunk
     // candidates); `length` is how far it reaches.
     bool chunk{false};
+    // A date or time a date word is written as (2026/11/23), or a symbol or
+    // emoji the reading names: the first page of a list has one of each.
+    // Typed: what was typed in another form, at the end of the list.
+    enum class Group : std::uint8_t { Word, Date, Symbol, Typed };
+    Group group{Group::Word};
     // What the sentence's other words say for it, as the topic order read
     // them (PhraseSignal); 0 when not read.
     std::array<float, 5> signals{};
