@@ -1346,14 +1346,32 @@ void TestMixedTyping(const RomajiTable& table, const MiniPack& pack) {
     Require(converted.front().english && !converted.back().english, "the English phrase is marked English, its space not");
     Type(composer, L"kikai");
     const auto held = composer.Segments();
-    Require(held.size() == 2 && held.front().settled && held.front().text == L"Push ",
+    Require(held.size() == 2 && held.front().settled && held.front().text == L"Push",
             "Mix holds the chunks before the one typed until Enter");
+    RequireText(held.back().text, L"きかい",
+                "keys that read clearly as Japanese show as Japanese after English, with no space before them");
     Require(held.front().english && !held.back().english, "the held English chunk is English, the kana typed after it not");
     composer.Convert();
     const auto sentence = composer.Commit();
     Require(sentence.starts_with(L"push") && sentence.size() > 4 && sentence[4] >= 0x3000,
             "Enter commits the whole sentence, Japanese right after English, which starts a Japanese "
             "sentence in small letters (pushきかい, not Push)");
+    // English typed with capitals, then Japanese without a space.
+    Type(composer, L"NHKnonyu-su");
+    {
+        const auto split = composer.Segments();
+        Require(split.size() == 2 && split.front().settled && split.front().text == L"NHK" &&
+                    split.back().text.starts_with(L"の"),
+                "two capitals, then a syllable: the English a chunk of its own, the kana typed after it the next");
+    }
+    composer.Clear();
+    Type(composer, L"APIs");
+    {
+        std::wstring shown;
+        for (const auto& segment : composer.Segments()) shown += segment.text;
+        RequireText(shown, L"APIs", "letters that make no syllable stay with the English");
+    }
+    composer.Clear();
     {
         // Mix AI: on Enter, a model trained for conversion chooses among the
         // sentence's texts, reading the keys and only what came before it.

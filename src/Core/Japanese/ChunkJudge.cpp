@@ -49,7 +49,7 @@ std::wstring ChunkJudge::WordAsWritten(std::wstring_view word, bool inJapanese) 
     // A name of its own (OK, GitHub); an acronym a name list has for a
     // common word only when written so (is, we, now: not IS, WE, NOW).
     if (forms_) {
-        if (const auto form = forms_->Find(word); form && (inJapanese || !form->japaneseOnly)) return form->written;
+        if (const auto form = OwnForm(word); form && (inJapanese || !form->japaneseOnly)) return form->written;
     }
     const std::wstring named = WrittenAs(word, inJapanese);
     const bool capitals = std::none_of(named.begin(), named.end(), [](wchar_t c) { return std::iswlower(c) != 0; });
@@ -61,7 +61,7 @@ std::wstring ChunkJudge::WrittenAs(std::wstring_view word, bool inJapanese) cons
     std::wstring lower(word);
     for (auto& c : lower) c = static_cast<wchar_t>(std::towlower(c));
     if (forms_) {
-        if (const auto form = forms_->Find(lower); form && (inJapanese || !form->japaneseOnly)) return form->written;
+        if (const auto form = OwnForm(lower); form && (inJapanese || !form->japaneseOnly)) return form->written;
     }
     if (names_) {
         if (const auto written = names_->WrittenAs(lower)) return *written;
@@ -78,7 +78,7 @@ std::wstring ChunkJudge::AsName(std::wstring written, bool inJapanese) const {
     if ((!englishNames_ && !productNames_) || written.size() < 2) return written;
     if (std::any_of(written.begin(), written.end(), [](wchar_t c) { return std::iswupper(c) != 0; })) return written;
     // A form of its own written so on purpose (docomo).
-    if (forms_ && forms_->Find(written)) return written;
+    if (forms_ && OwnForm(written)) return written;
     // A name in english-names with only its first letter a capital
     // (Whisky, Vercel) only when English writes it so too (Kindle) or
     // hardly uses it as a word (vercel; not whisky, 2.97).
@@ -103,9 +103,19 @@ std::wstring ChunkJudge::AsName(std::wstring written, bool inJapanese) const {
     return written;
 }
 
+std::optional<WrittenForms::Form> ChunkJudge::OwnForm(std::wstring_view lower) const {
+    if (!forms_) return std::nullopt;
+    auto form = forms_->Find(lower);
+    if (form && form->offered) form.reset();
+    return form;
+}
+
 std::optional<std::wstring> ChunkJudge::OfferedName(std::wstring_view keys) const {
     std::wstring lower(keys);
     for (auto& c : lower) c = static_cast<wchar_t>(std::towlower(c));
+    if (forms_) {
+        if (const auto form = forms_->Find(lower); form && form->offered) return form->written;
+    }
     for (const WrittenForms* names : {englishNames_, productNames_}) {
         if (!names) continue;
         if (const auto name = names->Find(lower); name && name->offered) return name->written;
@@ -123,7 +133,7 @@ std::optional<std::wstring> ChunkJudge::Hyphenated(std::wstring_view keys) const
         for (auto& c : second) c = static_cast<wchar_t>(std::towlower(c));
         if (english_.Score(first + L'-' + second) < thresholds_.knownWord) continue;
         const auto written = [&](const std::wstring& part) {
-            if (const auto form = forms_ ? forms_->Find(part) : std::nullopt) return form->written;
+            if (const auto form = forms_ ? OwnForm(part) : std::nullopt) return form->written;
             if (const auto named = names_ ? names_->WrittenAs(part) : std::nullopt) return *named;
             return part;
         };
@@ -234,7 +244,7 @@ ChunkJudge::Judgement ChunkJudge::JudgeLanguage(std::wstring_view keys, std::siz
     // so named is English even when it reads as romaji (uefi, not 上フィ).
     if (forms_) {
         const bool englishSoFar = englishBefore >= 2 || (englishBefore > 0 && !japaneseInSentence);
-        if (const auto form = forms_->Find(keys); form && (!form->japaneseOnly || !englishSoFar)) {
+        if (const auto form = OwnForm(keys); form && (!form->japaneseOnly || !englishSoFar)) {
             judgement.written = form->written;
             judgement.word = true;
             name = true;
@@ -557,7 +567,7 @@ std::optional<std::vector<ChunkJudge::Piece>> ChunkJudge::Split(std::wstring_vie
             // Two letters: only an acronym written by its own name that
             // reads as no romaji (okdesu: OKです, pcwo: PCを; not ai).
             if (length == 2) {
-                const auto form = forms_ ? forms_->Find(std::wstring(word)) : std::nullopt;
+                const auto form = forms_ ? OwnForm(std::wstring(word)) : std::nullopt;
                 if (form && !form->japaneseOnly && !kanaOf(word)) words.push_back({begin, begin + length});
                 continue;
             }
@@ -568,7 +578,7 @@ std::optional<std::vector<ChunkJudge::Piece>> ChunkJudge::Split(std::wstring_vie
             bool known = (length >= kShortestWord && english_.Score(word) >= thresholds_.knownWord) ||
                          (foreign && english_.Score(word) >= thresholds_.knownWord - kForeignBy);
             // A name written by its own name (Figma, Qiita, JSON).
-            if (!known && forms_ && word.size() >= 3 && forms_->Find(std::wstring(word))) known = true;
+            if (!known && forms_ && word.size() >= 3 && OwnForm(std::wstring(word))) known = true;
             if (!known && names_) {
                 for (const auto& spelling : names_->ForEnglish(word, 1)) {
                     const bool capitals = std::any_of(spelling.english.begin() + 1, spelling.english.end(),
@@ -582,7 +592,7 @@ std::optional<std::vector<ChunkJudge::Piece>> ChunkJudge::Split(std::wstring_vie
     const std::int64_t wordCost = thresholds_.costPerKana * kEnglishKana;
     const auto costOf = [&](const Word& w) {
         const auto word = keys.substr(w.begin, w.end - w.begin);
-        const bool common = english_.Score(word) >= thresholds_.commonWord || (forms_ && forms_->Find(std::wstring(word)));
+        const bool common = english_.Score(word) >= thresholds_.commonWord || (forms_ && OwnForm(std::wstring(word)));
         return common ? thresholds_.costPerKana * kCommonEnglishTenths / 10 : wordCost;
     };
     std::optional<std::int64_t> best;

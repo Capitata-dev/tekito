@@ -125,6 +125,13 @@ public:
         writtenAs_ = std::move(writtenAs);
     }
     void SetCasedWords(bool on) noexcept { casedWords_ = on; }
+    // Japanese mode: the part of speech kana after letters as typed follow
+    // (a noun's: NHKの, SNSに), and how letters typed may be written as a
+    // name, offered after them (IPS: iPS).
+    void SetLetterContext(std::uint16_t context) noexcept { letterContext_ = context; }
+    void SetLetterNames(std::function<std::vector<std::wstring>(std::wstring_view)> names) {
+        letterNames_ = std::move(names);
+    }
     // Candidates use only kanji in `range` (教育, 常用, 人名用 from `sets`).
     void SetKanjiSets(const KanjiSets* sets) noexcept { kanjiSets_ = sets; }
     void SetKanjiRange(KanjiRange range, int grade = 6, bool names = false) noexcept {
@@ -653,6 +660,12 @@ private:
     // Letters after a capital stay letters; whether `key` was taken so.
     bool FeedAscii(wchar_t key);
     void TakeCasedWord();
+    // Whether letters typed after a capital end the word they spell as it is
+    // written, `key` starting no English word after it (Zoom then d).
+    [[nodiscard]] bool LettersWordDone(wchar_t key) const;
+    // Mix: English typed with capitals and Japanese after it without a
+    // space (NHKno, Zoomde) become two chunks, as Space would make them.
+    void SplitAfterCapitals();
     [[nodiscard]] static std::wstring ForSentenceModel(std::wstring text);
     [[nodiscard]] bool HasAscii() const noexcept;
     // reading from `from` on, converted (letters after a capital as typed).
@@ -888,6 +901,8 @@ private:
     const Loanwords* loanwords_{nullptr};
     std::function<std::optional<std::wstring>(std::wstring_view)> writtenAs_;
     bool casedWords_{false};
+    std::uint16_t letterContext_{0};
+    std::function<std::vector<std::wstring>(std::wstring_view)> letterNames_;
     const ChunkJudge* chunkJudge_{nullptr};
     const EnglishSpelling* englishSpelling_{nullptr};
     bool englishCorrection_{true};
@@ -1058,6 +1073,9 @@ private:
     // phrases before the last few stay (MixLiveText).
     mutable std::vector<Phrase> mixLivePhrases_;
     mutable std::uint16_t mixLiveContext_{0};
+    // The chunk being typed after English alone read clearly as Japanese
+    // (TypedLetters): it stays so while it is typed on.
+    mutable bool japaneseAfterEnglish_{false};
     const KanaSlips* slips_{nullptr};
     std::vector<Unit> units_;
     // Units before the caret; pending keys belong at the caret.

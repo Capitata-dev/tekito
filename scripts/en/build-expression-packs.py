@@ -175,8 +175,8 @@ def build_written_forms() -> dict:
         if not line.strip() or line.startswith("#"):
             continue
         fields = line.split("\t")
-        if len(fields) != 2 or fields[1] not in ("always", "japanese"):
-            raise ValueError(f"{WRITTEN_FORM_SEEDS.name}:{number}: expected written form, always|japanese")
+        if len(fields) != 2 or fields[1] not in ("always", "japanese", "offer"):
+            raise ValueError(f"{WRITTEN_FORM_SEEDS.name}:{number}: expected written form, always|japanese|offer")
         key = re.sub(r"[ .\-]", "", fields[0]).lower()
         if not re.fullmatch(r"[a-z]+", key):
             raise ValueError(f"{WRITTEN_FORM_SEEDS.name}:{number}: {fields[0]!r} has no key of small letters")

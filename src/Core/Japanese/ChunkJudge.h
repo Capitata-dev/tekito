@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Core/Japanese/WrittenForms.h"
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -130,6 +131,9 @@ public:
     // A little-known name the keys are written as (meetin: MEETin), only
     // offered as a candidate after the keys as typed.
     [[nodiscard]] std::optional<std::wstring> OfferedName(std::wstring_view keys) const;
+    // A written form of its own (always, or among Japanese), not one only
+    // offered as a candidate.
+    [[nodiscard]] std::optional<WrittenForms::Form> OwnForm(std::wstring_view lower) const;
 
     // Japanese with English words typed into it without spaces
     // (reflectsareta: reflect + sareta, kyouhameetinggaarimasu: kyouha +

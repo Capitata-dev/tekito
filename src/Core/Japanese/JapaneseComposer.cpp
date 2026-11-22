@@ -522,6 +522,17 @@ void JapaneseComposer::Insert(wchar_t key) {
         typedCase_.push_back(key);
         if (key >= L'A' && key <= L'Z') key = static_cast<wchar_t>(key - L'A' + L'a');
     }
+    if (chunkJudge_ && !Live()) {
+        phrases_.clear();
+        listOpen_ = false;
+        if (!JoinSoundMark(key) && !FeedAscii(key)) {
+            RejoinConsonant(key);
+            Feed(key);
+        }
+        SplitAfterCapitals();
+        UpdatePredictions();
+        return;
+    }
     if (Live()) {
         // Typing on after picking keeps what was picked.
         if (IsConverted() && !preview_) SettleAll();
@@ -546,6 +557,53 @@ void JapaneseComposer::Insert(wchar_t key) {
         Feed(key);
     }
     UpdatePredictions();
+}
+
+void JapaneseComposer::SplitAfterCapitals() {
+    if (!chunkJudge_ || !table_ || !Typing() || IsConverted() || caret_ != units_.size() || !typedCaseKept_) return;
+    const std::wstring typed = typedCase_;
+    const auto upper = [](wchar_t c) { return c >= L'A' && c <= L'Z'; };
+    // Typed with a capital in its first letters (NHK, Zoom, iPhone).
+    if (typed.size() < 3 || std::none_of(typed.begin(), typed.begin() + 2, upper)) return;
+    const auto lowerCase = [](wchar_t c) { return c >= L'a' && c <= L'z'; };
+    // Where the English ends: after two capitals or more (NHK, URL, OK), or
+    // after a word as it is written (Zoom, GitHub), the longest.
+    std::size_t end = 0;
+    std::size_t capitals = 0;
+    while (capitals < typed.size() && (upper(typed[capitals]) || (capitals > 0 && typed[capitals] >= L'0' && typed[capitals] <= L'9'))) {
+        ++capitals;
+    }
+    const auto countUpper = std::count_if(typed.begin(), typed.begin() + static_cast<std::ptrdiff_t>(capitals), upper);
+    std::wstring lower = typed;
+    for (auto& c : lower) c = static_cast<wchar_t>(std::towlower(c));
+    if (countUpper >= 2 && capitals < typed.size()) {
+        end = capitals;
+    } else {
+        for (std::size_t at = typed.size() - 1; at >= 2 && end == 0; --at) {
+            const std::wstring word = typed.substr(0, at);
+            if (!std::all_of(word.begin(), word.end(), [&](wchar_t c) { return upper(c) || lowerCase(c); }) ||
+                std::none_of(word.begin(), word.end(), upper)) {
+                continue;
+            }
+            if (chunkJudge_->EnglishWritten(lower.substr(0, at)) == word) end = at;
+        }
+        // Not while the keys may still be an English word (Zoomed).
+        if (end > 0 && chunkJudge_->MayStartEnglishWord(lower)) end = 0;
+    }
+    if (end == 0 || end >= typed.size()) return;
+    // What follows reads as kana, a whole syllable at least (no, not n).
+    const std::wstring rest = typed.substr(end);
+    if (!std::all_of(rest.begin(), rest.end(), lowerCase)) return;
+    const auto tokens = ParseRomaji(*table_, rest);
+    if (tokens.empty() || std::any_of(tokens.begin(), tokens.end(), [](const RomajiToken& t) { return t.leftover; })) return;
+    // The English a chunk of its own, as Space settles it; the rest typed
+    // again as the next chunk.
+    ClearChunk();
+    typedCase_.clear();
+    for (const wchar_t c : typed.substr(0, end)) Insert(c);
+    Convert();
+    if (IsConverted()) SettleChunk();
+    for (const wchar_t c : rest) Insert(c);
 }
 
 bool JapaneseComposer::JoinSoundMark(wchar_t key) {
@@ -615,7 +673,7 @@ bool JapaneseComposer::FeedAscii(wchar_t key) {
     }
     if (!asciiMode_) return false;
     const bool small = key >= L'a' && key <= L'z';
-    if (small && capitals_ > 1) {
+    if (small && (capitals_ > 1 || LettersWordDone(key))) {
         asciiMode_ = false;
         capitals_ = 0;
         return false;
@@ -631,6 +689,25 @@ bool JapaneseComposer::FeedAscii(wchar_t key) {
     ++caret_;
     TakeCasedWord();
     return true;
+}
+
+bool JapaneseComposer::LettersWordDone(wchar_t key) const {
+    if (!casedWords_ || !writtenAs_ || !splitter_ || caret_ == 0 || !units_[caret_ - 1].ascii) return false;
+    std::size_t first = caret_;
+    while (first > 0 && units_[first - 1].ascii) --first;
+    std::wstring letters;
+    for (std::size_t u = first; u < caret_; ++u) {
+        const wchar_t c = units_[u].keys.empty() ? L'\0' : units_[u].keys.front();
+        if (!((c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z'))) return false;
+        letters += c;
+    }
+    if (letters.size() < 2) return false;
+    std::wstring lower = letters;
+    for (auto& c : lower) c = static_cast<wchar_t>(std::towlower(c));
+    const auto written = writtenAs_(lower);
+    const bool word = (written && *written == letters) || splitter_->EnglishWritten(lower) == letters;
+    return word && std::any_of(letters.begin(), letters.end(), [](wchar_t c) { return c >= L'A' && c <= L'Z'; }) &&
+           !splitter_->MayStartEnglishWord(lower + key);
 }
 
 void JapaneseComposer::TakeCasedWord() {
@@ -693,10 +770,22 @@ std::vector<Phrase> JapaneseComposer::ConvertReading(const std::wstring& reading
         while (end < reading.size() && ascii[end] == ascii[begin]) ++end;
         const std::wstring piece = reading.substr(begin, end - begin);
         if (ascii[begin]) {
-            out.push_back({begin, piece.size(), AsciiCandidates(piece)});
+            auto candidates = AsciiCandidates(piece);
+            if (letterNames_) {
+                std::wstring lower = piece;
+                for (auto& c : lower) c = static_cast<wchar_t>(std::towlower(c));
+                std::size_t at = 1;
+                for (auto& name : letterNames_(lower)) {
+                    if (std::any_of(candidates.begin(), candidates.end(), [&](const PhraseCandidate& c) { return c.text == name; })) continue;
+                    candidates.insert(candidates.begin() + static_cast<std::ptrdiff_t>(std::min(at++, candidates.size())),
+                                      {std::move(name), 0, PhraseCandidate::Kind::Special, false});
+                }
+            }
+            out.push_back({begin, piece.size(), std::move(candidates)});
         } else {
             SyncEdgeContext();
-            auto phrases = converter_->Convert(piece, {}, begin == from ? context : 0, words, userDictionary_);
+            const std::uint16_t left = begin == from ? context : begin > 0 && ascii[begin - 1] ? letterContext_ : 0;
+            auto phrases = converter_->Convert(piece, {}, left, words, userDictionary_);
             // Every part of the reading has a phrase, or it would drop out of
             // the text: a piece nothing reads stays as typed.
             std::size_t covered = 0;
@@ -4970,7 +5059,34 @@ std::optional<std::wstring> JapaneseComposer::TypedLetters() const {
     const bool asTyped = typedCaseKept_ && typedCase_.size() == keys.size();
     const bool capital = asTyped && std::any_of(typedCase_.begin(), typedCase_.end(),
                                                 [](wchar_t c) { return c >= L'A' && c <= L'Z'; });
-    if (!capital && !englishSoFar && !leftover && !foreignWord()) return std::nullopt;
+    // After English alone, letters while they may be English too (see you
+    // on); keys no English word starts with that read clearly as Japanese
+    // (SNS, then nitoukoushita) show as Japanese, and Enter commits them so.
+    // The keys still pending are left out (nit is に and t); once shown so,
+    // the chunk stays Japanese while it is typed on. A particle right after
+    // one English chunk too (NHKの, SNS に), not in an English sentence (see
+    // you on mo...).
+    const auto clearlyJapanese = [&] {
+        if (japaneseAfterEnglish_) return true;
+        std::wstring lower = keys;
+        for (auto& c : lower) c = static_cast<wchar_t>(std::towlower(c));
+        if (pending_.size() < lower.size()) lower.resize(lower.size() - pending_.size());
+        if (lower.size() < 2 ||
+            !std::all_of(lower.begin(), lower.end(), [](wchar_t c) { return (c >= L'a' && c <= L'z') || c == L'-'; })) {
+            return false;
+        }
+        if (lower.size() <= 2) {
+            constexpr std::wstring_view kParticles[] = {L"no", L"ni", L"ga", L"wo", L"de", L"ha", L"wa", L"mo", L"to", L"he", L"ya"};
+            const auto english = std::count_if(settled_.begin(), settled_.end(), [](const SettledChunk& c) { return c.isEnglish; });
+            return english == 1 && std::find(std::begin(kParticles), std::end(kParticles), lower) != std::end(kParticles) &&
+                   !JudgeChunk(lower).english;
+        }
+        if (chunkJudge_->MayStartEnglishWord(lower)) return false;
+        const auto judged = JudgeChunk(lower);
+        japaneseAfterEnglish_ = !judged.english && !judged.either;
+        return japaneseAfterEnglish_;
+    };
+    if (!capital && !(englishSoFar && !clearlyJapanese()) && !leftover && !foreignWord()) return std::nullopt;
     if (asTyped) return typedCase_;
     return keys;
 }
@@ -6409,6 +6525,7 @@ void JapaneseComposer::ClearChunk() noexcept {
     mixKanaShown_ = false;
     mixLiveReading_.clear();
     mixLivePhrases_.clear();
+    japaneseAfterEnglish_ = false;
     ResetLive();
 }
 

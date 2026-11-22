@@ -1,5 +1,6 @@
 # How a word typed in small letters is written by its own name, for Mix (ram: RAM).
-# written form <TAB> always | japanese (written so only in Japanese text: the word is plain English too).
+# written form <TAB> always | japanese (written so only in Japanese text: the word is plain English too)
+# | offer (only a candidate after the keys as typed: another word is written alike, iPS and IPS).
 # The key is the written form in small letters without spaces, dots or hyphens (Wi-Fi: wifi, Node.js: nodejs).
 # Written for TEKITO from general knowledge of product, service and computing names; no corpus is copied.
 AirPods	always
@@ -74,6 +75,8 @@ gRPC	always
 kHz	always
 vCPU	always
 eMMC	always
+iPS	offer
+dB	offer
 IPv	always
 IT	japanese
 JavaScript	always
