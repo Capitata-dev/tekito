@@ -606,7 +606,53 @@ bool JapaneseComposer::FeedAscii(wchar_t key) {
     units_.insert(units_.begin() + static_cast<std::ptrdiff_t>(caret_),
                   Unit{std::wstring(1, key), std::wstring(1, key), true});
     ++caret_;
+    TakeCasedWord();
     return true;
+}
+
+void JapaneseComposer::TakeCasedWord() {
+    // A word written with a small letter first and a capital inside
+    // (iPhone, macOS, eBay), typed so: once the letters after the capital
+    // spell it with the small ones read as kana before it (い, まc), those
+    // are letters too, as typed. Only for the word exactly as written.
+    if (!casedWords_ || !writtenAs_ || caret_ == 0) return;
+    std::size_t first = caret_;
+    while (first > 0 && units_[first - 1].ascii) --first;
+    const auto letter = [](wchar_t c) { return (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z'); };
+    if (first == 0 || units_[first].keys.empty() || units_[first].keys.front() < L'A' || units_[first].keys.front() > L'Z') return;
+    std::wstring letters;
+    for (std::size_t u = first; u < caret_; ++u) {
+        if (units_[u].keys.size() != 1 || !letter(units_[u].keys.front())) return;
+        letters += units_[u].keys;
+    }
+    const auto small = [](const std::wstring& keys) {
+        return !keys.empty() && std::all_of(keys.begin(), keys.end(), [](wchar_t c) { return c >= L'a' && c <= L'z'; });
+    };
+    constexpr std::size_t kMostUnits = 4;
+    std::wstring before;
+    for (std::size_t k = 1; k <= kMostUnits && k <= first; ++k) {
+        const std::size_t from = first - k;
+        if (units_[from].ascii || !small(units_[from].keys)) return;
+        before.insert(0, units_[from].keys);
+        const std::wstring word = before + letters;
+        std::wstring lower = word;
+        for (auto& c : lower) c = static_cast<wchar_t>(std::towlower(c));
+        const auto written = writtenAs_(lower);
+        if (!written || *written != word) continue;
+        // The kana before them as they were, for the live conversion's
+        // phrases kept from before.
+        std::size_t changedAt = 0;
+        for (std::size_t u = 0; u < from; ++u) changedAt += units_[u].kana.size();
+        for (std::size_t u = from; u < first; ++u) {
+            units_[u].kana = units_[u].keys;
+            units_[u].ascii = true;
+        }
+        while (settledPhrases_ > 0 && phrases_[settledPhrases_ - 1].begin + phrases_[settledPhrases_ - 1].length > changedAt) {
+            --settledPhrases_;
+        }
+        settledLength_ = settledPhrases_ ? phrases_[settledPhrases_ - 1].begin + phrases_[settledPhrases_ - 1].length : 0;
+        return;
+    }
 }
 
 std::vector<Phrase> JapaneseComposer::ConvertReading(const std::wstring& reading, std::size_t from,
@@ -3737,11 +3783,21 @@ void JapaneseComposer::AddSpecial(std::wstring_view reading, std::vector<PhraseC
     }
     // A date or time word, and what follows it in the phrase as long as the
     // first candidate ends with it too ("きょうは": 今日は, 2026/09/29は).
+    // What follows must be a particle or です and the like (いまから,
+    // あしたです), not the rest of another word (います: 居ます, いますが,
+    // いまさら: 今更).
     if (specialOptions_.dates) {
         const auto now = LocalTime::Now();
+        static constexpr std::wstring_view kAfterDate[] = {
+            L"は", L"が", L"を", L"に", L"の", L"で", L"と", L"も", L"へ", L"や", L"か", L"ね", L"よ", L"な",
+            L"から", L"まで", L"より", L"だ", L"じゃ", L"って", L"こそ", L"しか", L"さえ", L"ごろ", L"くらい", L"ぐらい"};
         for (std::size_t length = reading.size(); length >= 2; --length) {
             const auto suffix = reading.substr(length);
             if (!candidates.front().text.ends_with(suffix)) continue;
+            if (!suffix.empty() && std::none_of(std::begin(kAfterDate), std::end(kAfterDate),
+                                                [&](std::wstring_view after) { return suffix.starts_with(after); })) {
+                continue;
+            }
             auto dates = special_->Dates(SpecialConversions::Language::Japanese, reading.substr(0, length), now);
             if (dates.empty()) continue;
             insert(1, dates, suffix);

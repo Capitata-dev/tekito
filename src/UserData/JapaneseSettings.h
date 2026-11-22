@@ -59,6 +59,8 @@ inline void ApplyModeSettings(japanese::JapaneseComposer& composer, const UserSe
     composer.SetHalfWidthLetters(settings.japaneseLetterWidth == 1);
     composer.SetSentenceCheck(settings.japaneseSentenceCheck);
     composer.SetSlipAutoApply(settings.japaneseSlipAutoApply);
+    // Mix keeps a chunk typed with a capital as typed anyway.
+    composer.SetCasedWords(!mixed && settings.japaneseCasedWords);
     composer.SetEnterAsShown(settings.enterCommitsAsShown);
     composer.SetEscStepsBack(settings.escStepsBack);
     composer.SetConvertFromEnd(settings.convertFromEnd);

@@ -118,6 +118,13 @@ public:
     // English words for katakana candidates (ミーティング -> meeting), offered
     // right after them; nullptr offers none.
     void SetLoanwords(const Loanwords* loanwords) noexcept { loanwords_ = loanwords; }
+    // How a word in small letters is written, when with capitals (iphone:
+    // iPhone); and whether a word written so with a small letter first
+    // stays as typed (iPhone, macOS: not いPhone, まcOS).
+    void SetWrittenAs(std::function<std::optional<std::wstring>(std::wstring_view)> writtenAs) {
+        writtenAs_ = std::move(writtenAs);
+    }
+    void SetCasedWords(bool on) noexcept { casedWords_ = on; }
     // Candidates use only kanji in `range` (教育, 常用, 人名用 from `sets`).
     void SetKanjiSets(const KanjiSets* sets) noexcept { kanjiSets_ = sets; }
     void SetKanjiRange(KanjiRange range, int grade = 6, bool names = false) noexcept {
@@ -645,6 +652,7 @@ private:
     void Feed(wchar_t key);
     // Letters after a capital stay letters; whether `key` was taken so.
     bool FeedAscii(wchar_t key);
+    void TakeCasedWord();
     [[nodiscard]] bool HasAscii() const noexcept;
     // reading from `from` on, converted (letters after a capital as typed).
     [[nodiscard]] std::vector<Phrase> ConvertReading(const std::wstring& reading, std::size_t from,
@@ -877,6 +885,8 @@ private:
     int notationLevel_{3};
     const KeyConverter* keyConverter_{nullptr};
     const Loanwords* loanwords_{nullptr};
+    std::function<std::optional<std::wstring>(std::wstring_view)> writtenAs_;
+    bool casedWords_{false};
     const ChunkJudge* chunkJudge_{nullptr};
     const EnglishSpelling* englishSpelling_{nullptr};
     bool englishCorrection_{true};

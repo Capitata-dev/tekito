@@ -1051,6 +1051,22 @@ void TestCapitals(const RomajiTable& table, const MiniPack& pack) {
     composer.Clear();
     RequireText(Type(composer, L"kA"), L"ｋA", "a pending key settles before the capital");
     composer.Clear();
+    // A word written with a small letter first, typed as it is written.
+    composer.SetWrittenAs([](std::wstring_view lower) -> std::optional<std::wstring> {
+        if (lower == L"iphone") return std::wstring(L"iPhone");
+        if (lower == L"macos") return std::wstring(L"macOS");
+        return std::nullopt;
+    });
+    composer.SetCasedWords(true);
+    RequireText(Type(composer, L"iPhone"), L"iPhone", "iPhone stays as typed, its i too");
+    RequireText(composer.Commit(), L"iPhone", "and commits so");
+    RequireText(Type(composer, L"macOS"), L"macOS", "the small letters before the capital, pending ones too");
+    composer.Clear();
+    RequireText(Type(composer, L"iiPC"), L"いいPC", "not when the keys spell no such word");
+    composer.Clear();
+    composer.SetCasedWords(false);
+    RequireText(Type(composer, L"iPhone"), L"いPhone", "off: as other input methods type it");
+    composer.Clear();
     composer.SetLiveConversion(true);
     RequireText(Type(composer, L"Google"), L"Google", "live conversion shows them as typed");
     RequireText(composer.Commit(), L"Google", "and commits them");
@@ -2291,6 +2307,22 @@ void TestSpecialConversions(const RomajiTable& table, const MiniPack& pack) {
     Require(composer.FocusedCandidates()->size() >= 2 && (*composer.FocusedCandidates())[1].text == L"1+2=3",
             "and to the arithmetic with the sum");
     composer.Clear();
+
+    // A time for いま with a particle after it, not in います.
+    {
+        const auto hasTime = [&](const wchar_t* keys) {
+            Type(composer, keys);
+            composer.Convert();
+            const auto* list = composer.FocusedCandidates();
+            const bool time = list && std::any_of(list->begin(), list->end(), [](const auto& c) {
+                return c.text.find(L':') != std::wstring::npos;
+            });
+            composer.Clear();
+            return time;
+        };
+        Require(hasTime(L"imaha"), "いまは offers the time");
+        Require(!hasTime(L"imasu") && !hasTime(L"imasuga"), "います offers none: いま is part of another word");
+    }
 
     Type(composer, L"1234");
     composer.Convert();

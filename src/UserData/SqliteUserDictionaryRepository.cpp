@@ -579,6 +579,8 @@ bool SqliteUserDictionaryRepository::LoadSettings(UserSettings& settings) const 
             loaded.japaneseIgnoreCapsLock = value != 0;
         } else if (std::strcmp(key, "japanese_numpad_direct") == 0) {
             loaded.japaneseNumpadDirect = value != 0;
+        } else if (std::strcmp(key, "japanese_cased_words") == 0) {
+            loaded.japaneseCasedWords = value != 0;
         } else if (std::strcmp(key, "mixed_typing_enabled") == 0) {
             loaded.mixedTypingEnabled = value != 0;
         } else if (std::strcmp(key, "japanese_english_spacing") == 0) {
@@ -757,6 +759,7 @@ bool SqliteUserDictionaryRepository::SaveSettings(const UserSettings& settings) 
     saveValue("no_learning_in_private", settings.noLearningInPrivate ? 1 : 0);
     saveValue("japanese_ignore_caps_lock", settings.japaneseIgnoreCapsLock ? 1 : 0);
     saveValue("japanese_numpad_direct", settings.japaneseNumpadDirect ? 1 : 0);
+    saveValue("japanese_cased_words", settings.japaneseCasedWords ? 1 : 0);
     saveValue("mixed_typing_enabled", settings.mixedTypingEnabled ? 1 : 0);
     saveValue("japanese_english_spacing", settings.japaneseEnglishSpacing ? 1 : 0);
     for (const auto& number : kMixStyleNumbers) {

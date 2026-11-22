@@ -204,6 +204,7 @@ function initialState() {
       secretMode: false,
       japaneseIgnoreCapsLock: true,
       japaneseNumpadDirect: true,
+      japaneseCasedWords: true,
       uiLanguage: 0,
       excludedApps: ["Code.exe"],
       builtInExcludedApps: ["WindowsTerminal.exe", "OpenConsole.exe", "conhost.exe", "cmd.exe", "powershell.exe", "pwsh.exe"],

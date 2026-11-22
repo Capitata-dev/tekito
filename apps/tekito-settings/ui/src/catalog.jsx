@@ -414,6 +414,7 @@ export function catalog(ctx) {
     }),
     toggle("capsLock", "keys", "keyboard", "keyboard_capslock", j.capsLock, "japaneseIgnoreCapsLock", { modes: ja, detail: true }),
     toggle("numpad", "keys", "keyboard", "dialpad", j.numpad, "japaneseNumpadDirect", { modes: ja, detail: true }),
+    toggle("casedWords", "keys", "typing", "match_case", j.casedWords, "japaneseCasedWords", { modes: ["japanese"], detail: true }),
     {
       id: "romaji", page: "keys", group: "typing", keys: [], title: j.romaji.title, modes: ja,
       render: () => <LinkRow icon="table" title={head(j.romaji.title, ja)} description={j.romaji.description} onClick={ctx.openRomaji} />,
@@ -508,7 +509,7 @@ export function aiSpecs(ctx) {
     meanings: ["meaningsEnabled", "meaningsInUiLanguage"], candidateWindow: ["candidateWindowEnabled"],
     special: ["dateConversion", "symbolConversion", "calculatorEnabled"], firstPageSymbol: ["japaneseFirstPageSymbol", "mixFirstPageSymbol"],
     typedForms: ["japaneseTypedForms"], chunks: ["japaneseChunkCandidates"], kanaInput: ["japaneseKanaInput", "japaneseKanaInputKey"], capsLock: ["japaneseIgnoreCapsLock"], escStepsBack: ["escStepsBack"], showTypedKeys: ["showTypedKeys"], altSwitches: ["altSwitches", "altLeftMode", "altRightMode"], convertFromEnd: ["convertFromEnd"], letterDelay: ["japaneseLetterDelay"], kanjiDelay: ["japaneseKanjiDelay", "japaneseKanjiMarker"], shiftEnter: ["shiftEnterCommitsToFocus"], punctuationCommit: ["commitAtPunctuation"],
-    numpad: ["japaneseNumpadDirect"], brackets: ["bracketPairs"], spaceless: ["spacelessEnglish", "spacelessEnglishAlways"],
+    numpad: ["japaneseNumpadDirect"], casedWords: ["japaneseCasedWords"], brackets: ["bracketPairs"], spaceless: ["spacelessEnglish", "spacelessEnglishAlways"],
     numbers: ["japaneseRoughNumbersKanji", "numberConversion"],
     learn: ["learningEnabled"], secret: ["secretMode"], private: ["noLearningInPrivate"],
     companion: ["desktopCompanion"],

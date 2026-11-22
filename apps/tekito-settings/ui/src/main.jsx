@@ -136,6 +136,7 @@ const initialSettings = {
   japaneseEnglishSpacing: false,
   japaneseIgnoreCapsLock: true,
   japaneseNumpadDirect: true,
+  japaneseCasedWords: true,
   dateConversion: true,
   numberConversion: true,
   symbolConversion: true,

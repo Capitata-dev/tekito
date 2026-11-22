@@ -207,6 +207,9 @@ struct UserSettings {
     // (KeyConverter / KanaSlips), then convert; the keys as typed stay a
     // choice. Off: convert as typed; slip readings stay in the list only.
     bool japaneseSlipAutoApply{true};
+    // A word written with a small letter first and a capital inside
+    // (iPhone, macOS), typed so in Japanese mode: as typed, not いPhone.
+    bool japaneseCasedWords{true};
     // The symbol or emoji a reading names on the first page of its list
     // (まる: ○, わらい: 😂); off, with the other symbols at the end.
     bool japaneseFirstPageSymbol{true};

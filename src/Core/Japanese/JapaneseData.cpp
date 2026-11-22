@@ -284,6 +284,15 @@ void AttachJapaneseData(JapaneseComposer& composer) {
     composer.SetSentenceReranker(data && data->reranker.IsOpen() ? &data->reranker : nullptr);
     composer.SetKanaSlips(data && data->slips.IsOpen() ? &data->slips : nullptr);
     composer.SetKanjiSets(data && (!data->kanjiSets.Empty() || data->kanjiSets.HasVariants()) ? &data->kanjiSets : nullptr);
+    // By its own name (macOS), as a product is (iCloud), or as English
+    // writes it (iPhone, eBay).
+    if (data) {
+        composer.SetWrittenAs([data](std::wstring_view lower) -> std::optional<std::wstring> {
+            if (const auto form = data->writtenForms.Find(lower); form && !form->japaneseOnly) return form->written;
+            if (const auto product = data->productNames.Find(lower)) return product->written;
+            return data->loanwords.IsOpen() ? data->loanwords.WrittenAs(lower) : std::nullopt;
+        });
+    }
 }
 
 void AttachMixedTyping(JapaneseComposer& composer, bool on) {

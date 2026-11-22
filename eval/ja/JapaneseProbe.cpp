@@ -222,6 +222,7 @@ int main(int argc, char** argv) {
             if (name == "japaneseLiveConversion") { settings.japaneseLiveConversion = value != 0; found = true; }
             if (name == "japaneseSentenceCheck") { settings.japaneseSentenceCheck = value != 0; found = true; }
             if (name == "japaneseSlipAutoApply") { settings.japaneseSlipAutoApply = value != 0; found = true; }
+            if (name == "japaneseCasedWords") { settings.japaneseCasedWords = value != 0; found = true; }
             if (name == "japaneseFirstPageSymbol") { settings.japaneseFirstPageSymbol = value != 0; found = true; }
             if (name == "japaneseTypedForms") { settings.japaneseTypedForms = value != 0; found = true; }
             if (name == "japaneseChunkCandidates") { settings.japaneseChunkCandidates = value != 0; found = true; }
