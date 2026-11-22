@@ -50,6 +50,24 @@ TRAINING = """Fine-tuned on:
   names from Wikidata's labels (https://www.wikidata.org/, CC0 1.0).
 """
 
+# The strong model was then trained further on these as well (readings by
+# TEKITO's own dictionary), every evaluation sentence left out.
+STRONG_TRAINING = TRAINING + """- web text from ABEJA-CC-JA (https://registry.opendata.aws/abeja-cc-ja/),
+  under the Open Data Commons Public Domain Dedication and License (PDDL);
+- news sentences from the Leipzig Corpora Collection
+  (jpn_newscrawl_2019_1M, https://wortschatz.uni-leipzig.de/), under
+  CC BY 4.0;
+- Japanese sentences from Tatoeba (https://tatoeba.org/), under CC BY 2.0 FR;
+- YouTube captions from YODAS (https://huggingface.co/datasets/espnet/yodas),
+  under CC BY 3.0;
+- dialogues from the Accommodation Search Dialog Corpus
+  (https://github.com/megagonlabs/asdc), under CC BY 4.0, and from
+  Rosebleu (https://gitlab.com/open_contents_datasets/Rosebleu), under the
+  Apache License 2.0;
+- words from Mozc's dictionary (https://github.com/google/mozc,
+  dictionary_oss), under its BSD-style and IPAdic licences.
+"""
+
 PACKS = {
     "japanese-ai-light": {
         "display_name": "Japanese AI model (light)",
@@ -68,14 +86,16 @@ readings into Japanese text, exported to ONNX and quantized to 4 bits.
         "display_name": "Japanese AI model (strong)",
         "source": "LiquidAI/LFM2.5-1.2B-JP-202606 (https://huggingface.co/LiquidAI/LFM2.5-1.2B-JP-202606), "
                   "fine-tuned by TEKITO (scripts/ja/train-japanese-ai-model.py, LoRA)",
-        "manifest": {"prompt": "tekito-reading-v1", "margin": 2.0},
+        # Its margin chosen on evaluation sets kept apart from the ones it
+        # was then checked on.
+        "manifest": {"prompt": "tekito-reading-v1", "margin": 1.5},
         "notice": """Based on LFM2.5-1.2B-JP-202606 by Liquid AI
 (https://huggingface.co/LiquidAI/LFM2.5-1.2B-JP-202606), under the LFM Open
 License v1.0 (LICENSE). Modified by TEKITO: fine-tuned with low-rank
 adapters (merged in) to convert readings into Japanese text, exported to
 ONNX and quantized to 8 bits.
 
-""" + TRAINING,
+""" + STRONG_TRAINING,
     },
     # Settings' Home: reads what the user asks for and which setting it
     # means (by how likely each setting's description reads after it).
