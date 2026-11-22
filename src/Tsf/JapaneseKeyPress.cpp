@@ -100,8 +100,11 @@ japanese::KeyPress JapaneseKeyPressFor(WPARAM virtualKey, bool ignoreCapsLock, b
     if (ignoreCapsLock) keyboardState[VK_CAPITAL] &= static_cast<BYTE>(~1u);
     wchar_t buffer[8]{};
     const UINT scanCode = MapVirtualKeyW(static_cast<UINT>(virtualKey), MAPVK_VK_TO_VSC);
+    // Flag 4: the keyboard's state is left as it is, so a dead key (` ^ ~
+    // on US-International) still works on the next key, though the key is
+    // read twice (when tested, then when pressed).
     const int count = ToUnicodeEx(static_cast<UINT>(virtualKey), scanCode, keyboardState, buffer,
-                                  static_cast<int>(std::size(buffer)), 0, GetKeyboardLayout(0));
+                                  static_cast<int>(std::size(buffer)), 4, GetKeyboardLayout(0));
     if (count == 1) {
         press.key = Key::Character;
         press.character = buffer[0];

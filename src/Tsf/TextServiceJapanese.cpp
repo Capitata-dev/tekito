@@ -427,7 +427,7 @@ wchar_t TypedCharacter(WPARAM wParam) {
     wchar_t buffer[8]{};
     const UINT scanCode = MapVirtualKeyW(static_cast<UINT>(wParam), MAPVK_VK_TO_VSC);
     const int count = ToUnicodeEx(static_cast<UINT>(wParam), scanCode, keyboardState, buffer,
-                                  static_cast<int>(std::size(buffer)), 0, GetKeyboardLayout(0));
+                                  static_cast<int>(std::size(buffer)), 4, GetKeyboardLayout(0));
     return count == 1 ? buffer[0] : 0;
 }
 

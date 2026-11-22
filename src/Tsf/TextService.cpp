@@ -596,12 +596,15 @@ HRESULT TextService::ActivateEx(ITfThreadMgr* threadManager, TfClientId clientId
     HRESULT hr = threadManager_->QueryInterface(IID_PPV_ARGS(keystrokeManager.Put()));
     if (FAILED(hr)) {
         Trace(L"ActivateEx QueryInterface ITfKeystrokeMgr failed");
+        // Not left half active: what was set up is undone.
+        (void)Deactivate();
         return hr;
     }
 
     hr = keystrokeManager->AdviseKeyEventSink(clientId_, this, TRUE);
     if (FAILED(hr)) {
         Trace(L"ActivateEx AdviseKeyEventSink failed");
+        (void)Deactivate();
         return hr;
     }
 
@@ -635,6 +638,18 @@ HRESULT TextService::Deactivate() {
     CancelJapaneseRefine();
     StopWatchingAiAnswer();
     StopJapaneseRedisplay();
+    // A composition still open is committed as it stands (and its underline
+    // taken off) before the text service goes, rather than left behind.
+    if (composition_ && compositionContext_ && clientId_ != TF_CLIENTID_NULL) {
+        KeyInput input{};
+        input.type = japanese_.IsComposing() ? KeyInput::Type::JapaneseCommit : KeyInput::Type::EndComposition;
+        if (auto* session = new (std::nothrow) KeyEditSession(this, compositionContext_, input)) {
+            HRESULT sessionResult = E_FAIL;
+            (void)compositionContext_->RequestEditSession(clientId_, session, TF_ES_SYNC | TF_ES_READWRITE,
+                                                          &sessionResult);
+            session->Release();
+        }
+    }
     if (settingsLoaded_) SyncRuntimeState();
     if (settingsLoaded_) {
         userdata::UserSettings latestSettings = userSettings_;
@@ -1130,8 +1145,13 @@ HRESULT TextService::OnTestKeyDown(ITfContext* context, WPARAM wParam, LPARAM lP
             *eaten = FALSE;
             return S_OK;
         }
-        if (context) [[maybe_unused]] const auto ignored = RequestKeyEditSession(context, input);
-        keyFinishedInTest_ = std::pair{wParam, lParam};
+        // Only a word finished here is passed over in OnKeyDown; when the
+        // edit session failed, OnKeyDown finishes it.
+        if (context && RequestKeyEditSession(context, input) == S_OK) {
+            keyFinishedInTest_ = std::pair{wParam, lParam};
+        } else {
+            keyFinishedInTest_.reset();
+        }
         *eaten = FALSE;
         return S_OK;
     }
@@ -1231,6 +1251,22 @@ HRESULT TextService::OnPushContext(ITfContext*) { return S_OK; }
 
 HRESULT TextService::OnPopContext(ITfContext* context) {
     if (context && context == sinkContext_.Get()) UnadviseContextSinks();
+    // The context the composition is in goes away: nothing more can be
+    // written there, and the typing and its list go with it.
+    if (context && context == compositionContext_) {
+        if (composition_) {
+            composition_->Release();
+            composition_ = nullptr;
+        }
+        compositionContext_->Release();
+        compositionContext_ = nullptr;
+        compositionText_.clear();
+        candidateWindow_.Hide();
+        state_.Reset();
+        rawText_.clear();
+        symbolComposition_ = false;
+        japanese_.Clear();
+    }
     return S_OK;
 }
 
@@ -1313,6 +1349,9 @@ HRESULT TextService::OnLayoutChange(ITfContext* context, TfLayoutCode code, ITfC
 
 HRESULT TextService::OnCompositionTerminated(TfEditCookie, ITfComposition* composition) {
     Trace(L"OnCompositionTerminated");
+    // An earlier composition ending while another one goes on leaves the
+    // one that goes on alone.
+    if (composition_ && composition && composition_ != composition) return S_OK;
     if (composition_ == composition) {
         composition_->Release();
         composition_ = nullptr;
@@ -1456,7 +1495,7 @@ bool TextService::TranslateEnglishKey(WPARAM wParam, KeyInput& input) {
     wchar_t buffer[8]{};
     const UINT scanCode = MapVirtualKeyW(static_cast<UINT>(wParam), MAPVK_VK_TO_VSC);
     const int count = ToUnicodeEx(static_cast<UINT>(wParam), scanCode, keyboardState,
-                                  buffer, static_cast<int>(std::size(buffer)), 0,
+                                  buffer, static_cast<int>(std::size(buffer)), 4,
                                   GetKeyboardLayout(0));
     if (count == 1 && buffer[0] >= 0x20 && buffer[0] != 0x7f) {
         // "--" becomes a dash; a hyphen inside a word still ends it as typed.

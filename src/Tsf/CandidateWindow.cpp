@@ -29,6 +29,7 @@
 
 #include <winrt/Windows.UI.h>
 
+#include <atomic>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -379,7 +380,10 @@ struct CandidateWindow::Channel {
     std::mutex mutex;
     Frame pending;
     bool hasPending{false};
-    HWND controlHwnd{nullptr};
+    std::atomic<HWND> controlHwnd{nullptr};
+    // Initialize stopped waiting for the UI thread: it ends as soon as it
+    // has started, rather than run on with nobody to tell it to stop.
+    std::atomic<bool> abandoned{false};
     HWND notifyHwnd{nullptr};
     HINSTANCE instance{nullptr};
     DPI_AWARENESS_CONTEXT dpiContext{nullptr};
@@ -2251,7 +2255,7 @@ void RunUiThread(const std::shared_ptr<CandidateWindow::Channel>& channel) {
         const bool started = view.Start();
         channel->controlHwnd = started ? view.Control() : nullptr;
         SetEvent(channel->ready);
-        if (started) {
+        if (started && !channel->abandoned) {
             MSG msg;
             while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
                 TranslateMessage(&msg);
@@ -2329,9 +2333,13 @@ bool CandidateWindow::Initialize(HINSTANCE instance,
         Shutdown();
         return false;
     }
-    WaitForSingleObject(channel->ready, 5000);
+    if (WaitForSingleObject(channel->ready, 5000) != WAIT_OBJECT_0) {
+        // Too slow: the thread ends once it starts (or, started just now, is
+        // told to by Shutdown).
+        channel->abandoned = true;
+    }
     channel_ = std::move(channel);
-    if (!channel_->controlHwnd) {
+    if (channel_->abandoned || !channel_->controlHwnd) {
         Shutdown();
         return false;
     }

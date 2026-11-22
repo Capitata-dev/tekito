@@ -142,8 +142,9 @@ HRESULT CandidateListElement::SetSelection(UINT index) {
 }
 
 HRESULT CandidateListElement::Finalize() {
-    if (selected_ >= candidates_.size() || !choose_) return E_FAIL;
-    choose_(selected_);
+    if (candidates_.empty() || !choose_) return E_FAIL;
+    // What GetSelection reported: the first before one is stepped into.
+    choose_(selected_ < candidates_.size() ? selected_ : 0);
     return S_OK;
 }
 
