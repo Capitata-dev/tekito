@@ -154,13 +154,21 @@ bool WriteKeyFile(const std::filesystem::path& path, const KeyFile& file) {
     // Written beside it, then put in place, so a failure leaves the old one.
     auto temporary = path;
     temporary += L".new-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetCurrentThreadId());
-    {
-        std::ofstream file_(temporary, std::ios::binary | std::ios::trunc);
-        const auto text = out.str();
-        file_.write(text.data(), static_cast<std::streamsize>(text.size()));
-        if (!file_) return false;
+    // Every byte written and on the disk, the file closed, before it takes
+    // the place of the only key there is; anything less, and it is removed.
+    const auto text = out.str();
+    const HANDLE handle = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    const bool wrote = WriteFile(handle, text.data(), static_cast<DWORD>(text.size()), &written, nullptr) &&
+                       written == text.size() && FlushFileBuffers(handle);
+    const bool closed = CloseHandle(handle) != FALSE;
+    if (!wrote || !closed ||
+        !MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileW(temporary.c_str());
+        return false;
     }
-    return MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+    return true;
 }
 
 std::optional<Bytes> SystemWrap(const DataKey& key) {
@@ -431,7 +439,8 @@ bool DisableEncryption(const std::filesystem::path& database) {
     if (!lock.Held()) return false;
     const auto path = UserKeyPath(database);
     auto file = ReadKeyFile(path);
-    if (!file) return true;
+    // No key file: done only when there is nothing encrypted to undo.
+    if (!file) return !DatabaseEncrypted(database);
     file->encrypt = false;
     if (!WriteKeyFile(path, *file)) return false;
     SettleEncryption(database);
@@ -560,7 +569,9 @@ bool UnlockDatabase(sqlite3* connection, const std::filesystem::path& database) 
     try {
         const auto file = ReadKeyFile(UserKeyPath(database));
         if (!file) return false;
-        auto key = SystemUnwrap(*file);
+        // The key it opens with now: the system's, or the new one it was
+        // changed to before user.key took it in (a renewal that stopped).
+        auto key = CurrentKey(database, *file);
         if (!key) return false;
         const bool ok = KeyConnection(connection, *key);
         crypto_wipe(key->data(), key->size());
