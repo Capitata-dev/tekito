@@ -2014,6 +2014,56 @@ void TestDataPackValidation() {
     std::filesystem::remove_all(invalidRoot, error);
 }
 
+void TestDataPackInstall() {
+    namespace fs = std::filesystem;
+    std::error_code error;
+    const auto work = fs::temp_directory_path() / L"tekito-pack-install";
+    fs::remove_all(work, error);
+    const auto root = work / L"data";
+    fs::create_directories(root / L"test-pack");
+    std::ofstream(root / L"test-pack" / L"model.data") << "old";
+    const wchar_t* windows = _wgetenv(L"SystemRoot");
+    const auto tar = fs::path(windows ? windows : L"C:\\Windows") / L"System32" / L"tar.exe";
+    // A zip of test-pack, its model.data's hash in the manifest right or not.
+    const auto makeZip = [&](const std::string& data, bool rightHash, const std::wstring& name) {
+        const auto source = work / (name + L".src");
+        const auto pack = source / L"test-pack";
+        fs::create_directories(pack);
+        std::ofstream(pack / L"NOTICE") << "test pack\n";
+        std::ofstream(pack / L"model.onnx") << "graph";
+        std::ofstream(pack / L"model.data") << data;
+        const auto dataHash = rightHash ? tekito::userdata::FileSha256(pack / L"model.data") : std::string(64, '0');
+        std::ofstream(pack / L"manifest.json")
+            << R"({"pack_id":"test-pack","version":"1","language":"ja-JP","type":"test","file":"model.onnx",)"
+            << R"("sha256":{"file":")" << tekito::userdata::FileSha256(pack / L"model.onnx") << R"(","model.data":")"
+            << dataHash << R"("},"license":"TEST","notice_file":"NOTICE"})";
+        const auto zip = work / (name + L".zip");
+        const std::wstring command = L"\"\"" + tar.wstring() + L"\" -a -c -f \"" + zip.wstring() + L"\" -C \"" +
+                                     source.wstring() + L"\" test-pack\"";
+        Require(_wsystem(command.c_str()) == 0, "tar.exe makes the test pack's ZIP");
+        return zip;
+    };
+    const auto readData = [&] {
+        std::ifstream in(root / L"test-pack" / L"model.data", std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    };
+    const auto good = makeZip("new", true, L"good");
+    Require(tekito::userdata::InstallDataPacks(good, tekito::userdata::FileSha256(good), {L"test-pack"}, root) ==
+                    tekito::userdata::AiModelInstallError::None &&
+                readData() == "new" && !fs::exists(root / L"test-pack.old") &&
+                !fs::exists(root / L"japanese-data.download"),
+            "a pack is put in place of the one there, and nothing is left beside it");
+    const auto bad = makeZip("changed", false, L"bad");
+    Require(tekito::userdata::InstallDataPacks(bad, tekito::userdata::FileSha256(bad), {L"test-pack"}, root) ==
+                    tekito::userdata::AiModelInstallError::Invalid &&
+                readData() == "new",
+            "a pack whose files do not match its manifest is turned away, and the one there kept");
+    Require(tekito::userdata::InstallDataPacks(good, std::string(64, '0'), {L"test-pack"}, root) ==
+                tekito::userdata::AiModelInstallError::Checksum,
+            "a zip that is not the one expected is turned away");
+    fs::remove_all(work, error);
+}
+
 class TestFrequencyProvider final : public tekito::IFrequencyProvider {
 public:
     [[nodiscard]] double Score(std::wstring_view word) const noexcept override {
@@ -2812,6 +2862,7 @@ int main() {
     TestUserLearningStore();
     TestSqliteUserLearningRepository();
     TestDataPackValidation();
+    TestDataPackInstall();
     TestPostalCodeImport();
     TestImeDictionaryImport();
     TestEnglishWritingRules();

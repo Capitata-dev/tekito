@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <cwctype>
@@ -173,12 +174,20 @@ AiModelKind ReadAiModelKind(AiModel model) {
         const auto at = manifest.find(key);
         const auto open = at == std::string::npos ? at : manifest.find('"', manifest.find(':', at) + 1);
         const auto close = open == std::string::npos ? open : manifest.find('"', open + 1);
-        if (close != std::string::npos) *name = std::wstring(manifest.begin() + static_cast<std::ptrdiff_t>(open) + 1,
-                                                             manifest.begin() + static_cast<std::ptrdiff_t>(close));
+        if (close == std::string::npos) continue;
+        std::wstring value(manifest.begin() + static_cast<std::ptrdiff_t>(open) + 1,
+                           manifest.begin() + static_cast<std::ptrdiff_t>(close));
+        // A file of the pack's own: a plain name, never a path.
+        const bool plain = !value.empty() && value != L"." && value != L".." &&
+                           value.find_first_of(L"\\/:") == std::wstring::npos;
+        if (plain) *name = std::move(value);
     }
     if (const auto at = manifest.find("\"margin\""); at != std::string::npos) {
         const auto colon = manifest.find(':', at);
-        if (colon != std::string::npos) kind.margin = std::strtod(manifest.c_str() + colon + 1, nullptr);
+        const double margin = colon == std::string::npos ? -1.0 : std::strtod(manifest.c_str() + colon + 1, nullptr);
+        // ln p: a margin that is not a number, or is not a sensible one, is
+        // passed over.
+        if (std::isfinite(margin) && margin >= 0.0 && margin <= 50.0) kind.margin = margin;
     }
     return kind;
 }

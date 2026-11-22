@@ -8,10 +8,12 @@
 #endif
 #include <windows.h>
 
+#include <chrono>
 #include <fstream>
 #include <iterator>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace tekito::userdata {
 namespace {
@@ -62,6 +64,76 @@ bool RemoveWhenFree(const std::filesystem::path& directory) {
     return false;
 }
 
+// Moves `from` to `to`, trying again for a moment while the helper that was
+// told to stop still has its model mapped.
+bool MoveWhenFree(const std::filesystem::path& from, const std::filesystem::path& to) {
+    std::error_code error;
+    for (int tries = 0; tries < 20; ++tries) {
+        error.clear();
+        std::filesystem::rename(from, to, error);
+        if (!error) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+    return false;
+}
+
+// Whether what was unpacked is plain files and folders only: no link or
+// junction that leads elsewhere.
+bool OnlyPlainFiles(const std::filesystem::path& root) {
+    std::error_code error;
+    for (auto it = std::filesystem::recursive_directory_iterator(root, error);
+         !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error)) {
+        const DWORD attributes = GetFileAttributesW(it->path().c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) return false;
+    }
+    return !error;
+}
+
+// Whether each file the manifest gives a SHA-256 for ("sha256": {"model.data":
+// "...", ...}) has it; "file" and "index" ValidateDataPack checks.
+bool FilesMatchManifest(const std::filesystem::path& pack) {
+    std::ifstream in(pack / L"manifest.json", std::ios::binary);
+    const std::string manifest((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const auto key = manifest.find("\"sha256\"");
+    const auto open = key == std::string::npos ? key : manifest.find('{', key);
+    const auto close = open == std::string::npos ? open : manifest.find('}', open);
+    if (close == std::string::npos) return false;
+    const std::string hashes = manifest.substr(open + 1, close - open - 1);
+    std::vector<std::string> strings;
+    for (std::size_t at = hashes.find('"'); at != std::string::npos;) {
+        const auto end = hashes.find('"', at + 1);
+        if (end == std::string::npos) return false;
+        strings.push_back(hashes.substr(at + 1, end - at - 1));
+        at = hashes.find('"', end + 1);
+    }
+    if (strings.size() % 2 != 0) return false;
+    for (std::size_t i = 0; i < strings.size(); i += 2) {
+        const auto& name = strings[i];
+        if (name == "file" || name == "index") continue;
+        const std::wstring file(name.begin(), name.end());
+        // A file name of the pack's own (model.data), never a path.
+        if (file.empty() || file == L"." || file == L".." || file.find_first_of(L"\\/:") != std::wstring::npos) {
+            return false;
+        }
+        if (FileSha256(pack / file) != strings[i + 1]) return false;
+    }
+    return true;
+}
+
+// The zip, held open so it cannot be changed between its check and its
+// unpacking (others may still read it).
+struct HeldFile {
+    HANDLE handle{INVALID_HANDLE_VALUE};
+    explicit HeldFile(const std::filesystem::path& path)
+        : handle(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                             FILE_ATTRIBUTE_NORMAL, nullptr)) {}
+    ~HeldFile() {
+        if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    }
+    HeldFile(const HeldFile&) = delete;
+    HeldFile& operator=(const HeldFile&) = delete;
+};
+
 }  // namespace
 
 bool IsPlainPackId(std::wstring_view packId) noexcept {
@@ -75,32 +147,71 @@ bool IsPlainPackId(std::wstring_view packId) noexcept {
     return true;
 }
 
+namespace {
+
+// Puts each unpacked pack (`from`/<id>) in place of the one there, all or
+// none: the ones there are moved aside first, and put back if any new one
+// cannot be placed.
+AiModelInstallError PutInPlace(const std::filesystem::path& from, const std::vector<std::wstring>& packIds,
+                               const std::filesystem::path& dataRoot) {
+    std::error_code error;
+    std::vector<std::wstring> movedAside, placed;
+    const auto aside = [&](const std::wstring& id) { return dataRoot / (id + L".old"); };
+    const auto undo = [&](AiModelInstallError result) {
+        for (const auto& id : placed) (void)RemoveWhenFree(dataRoot / id);
+        for (const auto& id : movedAside) (void)MoveWhenFree(aside(id), dataRoot / id);
+        return result;
+    };
+    for (const auto& id : packIds) {
+        const auto target = dataRoot / id;
+        if (std::filesystem::exists(aside(id), error) && !RemoveWhenFree(aside(id))) {
+            return undo(AiModelInstallError::InUse);
+        }
+        if (std::filesystem::exists(target, error)) {
+            if (!MoveWhenFree(target, aside(id))) return undo(AiModelInstallError::InUse);
+            movedAside.push_back(id);
+        }
+        if (!MoveWhenFree(from / id, target)) return undo(AiModelInstallError::Unpack);
+        placed.push_back(id);
+    }
+    for (const auto& id : movedAside) (void)RemoveWhenFree(aside(id));
+    return AiModelInstallError::None;
+}
+
+// Checks `zip` and unpacks it into `into`, the zip held so it is the one
+// checked; and checks what came out (`packIds`, each whole).
+AiModelInstallError CheckAndUnpack(const std::filesystem::path& zip, std::string_view sha256,
+                                   const std::filesystem::path& into, const std::vector<std::wstring>& packIds) {
+    const HeldFile held(zip);
+    if (held.handle == INVALID_HANDLE_VALUE || FileSha256(zip) != sha256) return AiModelInstallError::Checksum;
+    if (!Unpack(zip, into) || !OnlyPlainFiles(into)) return AiModelInstallError::Unpack;
+    // Every pack checked before any is put in place.
+    for (const auto& packId : packIds) {
+        DataPackStatus status;
+        if (!ValidateDataPack(into / packId, status) || status.packId != packId || !FilesMatchManifest(into / packId)) {
+            return AiModelInstallError::Invalid;
+        }
+    }
+    return AiModelInstallError::None;
+}
+
+}  // namespace
+
 AiModelInstallError InstallAiModelPack(const std::filesystem::path& zip, std::string_view sha256,
                                        std::wstring_view packId, const std::filesystem::path& dataRoot) {
     if (!IsPlainPackId(packId)) return AiModelInstallError::Invalid;
-    if (FileSha256(zip) != sha256) return AiModelInstallError::Checksum;
-    std::error_code error;
-    const auto unpacked = dataRoot / (std::wstring(packId) + L".download");
-    if (!Unpack(zip, unpacked)) {
-        std::filesystem::remove_all(unpacked, error);
-        return AiModelInstallError::Unpack;
+    const std::vector<std::wstring> ids{std::wstring(packId)};
+    const auto unpacked = dataRoot / (ids.front() + L".download");
+    const auto done = [&](AiModelInstallError result) {
+        std::error_code ignored;
+        std::filesystem::remove_all(unpacked, ignored);
+        return result;
+    };
+    if (const auto checked = CheckAndUnpack(zip, sha256, unpacked, ids); checked != AiModelInstallError::None) {
+        return done(checked);
     }
-    const auto pack = unpacked / std::wstring(packId);
-    DataPackStatus status;
-    if (!ValidateDataPack(pack, status) || status.packId != packId) {
-        std::filesystem::remove_all(unpacked, error);
-        return AiModelInstallError::Invalid;
-    }
-    const auto target = dataRoot / std::wstring(packId);
     StopAiHelper();
-    if (std::filesystem::exists(target, error) && !RemoveWhenFree(target)) {
-        std::filesystem::remove_all(unpacked, error);
-        return AiModelInstallError::InUse;
-    }
-    std::filesystem::rename(pack, target, error);
-    std::error_code ignored;
-    std::filesystem::remove_all(unpacked, ignored);
-    return error ? AiModelInstallError::Unpack : AiModelInstallError::None;
+    return done(PutInPlace(unpacked, ids, dataRoot));
 }
 
 AiModelInstallError InstallDataPacks(const std::filesystem::path& zip, std::string_view sha256,
@@ -109,7 +220,6 @@ AiModelInstallError InstallDataPacks(const std::filesystem::path& zip, std::stri
     for (const auto& packId : packIds) {
         if (!IsPlainPackId(packId)) return AiModelInstallError::Invalid;
     }
-    if (FileSha256(zip) != sha256) return AiModelInstallError::Checksum;
     std::error_code error;
     std::filesystem::create_directories(dataRoot, error);
     const auto unpacked = dataRoot / L"japanese-data.download";
@@ -118,19 +228,10 @@ AiModelInstallError InstallDataPacks(const std::filesystem::path& zip, std::stri
         std::filesystem::remove_all(unpacked, ignored);
         return result;
     };
-    if (!Unpack(zip, unpacked)) return done(AiModelInstallError::Unpack);
-    // Every pack checked before any is put in place.
-    for (const auto& packId : packIds) {
-        DataPackStatus status;
-        if (!ValidateDataPack(unpacked / packId, status) || status.packId != packId) return done(AiModelInstallError::Invalid);
+    if (const auto checked = CheckAndUnpack(zip, sha256, unpacked, packIds); checked != AiModelInstallError::None) {
+        return done(checked);
     }
-    for (const auto& packId : packIds) {
-        const auto target = dataRoot / packId;
-        if (std::filesystem::exists(target, error) && !RemoveWhenFree(target)) return done(AiModelInstallError::InUse);
-        std::filesystem::rename(unpacked / packId, target, error);
-        if (error) return done(AiModelInstallError::Unpack);
-    }
-    return done(AiModelInstallError::None);
+    return done(PutInPlace(unpacked, packIds, dataRoot));
 }
 
 bool RemoveAiModelPack(std::wstring_view packId, const std::filesystem::path& dataRoot) {
