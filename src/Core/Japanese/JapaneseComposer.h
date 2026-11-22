@@ -3,6 +3,7 @@
 #include "Core/Japanese/ChunkJudge.h"
 #include "Core/Japanese/JapaneseConverter.h"
 #include "Core/Japanese/KanjiSets.h"
+#include "Core/Japanese/SentenceReranker.h"
 #include "Core/SpecialConversions.h"
 
 #include <array>
@@ -28,7 +29,6 @@ class JapaneseUserDictionary;
 class Loanwords;
 class PostalCodes;
 class RomajiTable;
-class SentenceReranker;
 class AiJudge;
 class KanaSlips;
 
@@ -967,6 +967,9 @@ private:
         ChunkJudge::Judgement judged;
     };
     mutable std::vector<JudgedKeys> judgedKeys_;
+    // What the sentence check read of this sentence so far: read again at
+    // each pause, its start is not read again.
+    mutable SentenceReranker::Memory rerankerMemory_;
     // A chunk that reads both ways takes the language the user chose for
     // it before (learning: game picked as English over げめ, or 褒め over
     // home), when that was learned.

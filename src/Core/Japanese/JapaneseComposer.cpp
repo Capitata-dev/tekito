@@ -2339,7 +2339,7 @@ bool JapaneseComposer::FixSlips() {
         };
         std::vector<std::wstring> sentences{sentenceOf(phrases_)};
         for (const auto& t : tried) sentences.push_back(sentenceOf(t.phrases));
-        const auto logProbabilities = reranker_->LogProbabilities(sentences, precedingText_);
+        const auto logProbabilities = reranker_->LogProbabilities(sentences, precedingText_, &rerankerMemory_);
         double best = kKanaWeight * found[0].score + logProbabilities[0] + kSlipMargin;
         chosen = tried.size();
         for (std::size_t i = 0; i < tried.size(); ++i) {
@@ -2793,7 +2793,7 @@ std::vector<std::size_t> JapaneseComposer::ReadBest(const std::vector<std::vecto
     const bool weighed = sentenceWeights_.on && !signals.empty();
     std::vector<std::pair<double, double>> scored;
     std::size_t chosen = reranker_->Choose(checked, byCost, wholePenalty_, precedingText_,
-                                           keepFeatures_ || weighed ? &scored : nullptr);
+                                           keepFeatures_ || weighed ? &scored : nullptr, &rerankerMemory_);
     if (!weighed && chosen != 0 && chosen < checked.size()) {
         const auto& pick = chosen < byCost ? sentences[chosen] : sentences[combined + chosen - byCost];
         if (KeepsTopic(sentences[0], pick)) chosen = 0;
@@ -4071,7 +4071,7 @@ void JapaneseComposer::AddSlipCandidatesFor(PhraseState& phrase) const {
                 for (const auto& p : phrases_) shown += PhraseText(p);
                 std::vector<std::wstring> sentences{shown};
                 for (const auto& c : wholeInput) sentences.push_back(c.text);
-                const auto scores = reranker_->LogProbabilities(sentences, precedingText_);
+                const auto scores = reranker_->LogProbabilities(sentences, precedingText_, &rerankerMemory_);
                 for (std::size_t i = 1; i < scores.size(); ++i) wholeSlipBetter = wholeSlipBetter || scores[i] > scores[0];
             } else {
                 for (const auto& c : wholeInput) wholeSlipBetter = wholeSlipBetter || c.cost + kSlipLikelier < typedCost;
@@ -4111,7 +4111,7 @@ void JapaneseComposer::AddSlipCandidatesFor(PhraseState& phrase) const {
                 constexpr double kResplitNats = 0.0;
                 std::vector<std::wstring> sentences{shownText};
                 for (std::size_t i = 0; i < heads.size() && i < kHeads; ++i) sentences.push_back(heads[i].text + rest);
-                const auto scores = reranker_->LogProbabilities(sentences, precedingText_);
+                const auto scores = reranker_->LogProbabilities(sentences, precedingText_, &rerankerMemory_);
                 for (std::size_t i = 2; i < scores.size(); ++i) {
                     if (scores[i] > scores[head + 1]) head = i - 1;
                 }
@@ -5354,7 +5354,7 @@ void JapaneseComposer::CheckMixedSentence() {
         std::vector<std::wstring> english(parts.size());
         for (std::size_t k = 0; k < parts.size(); ++k) english[k] = withWord[k][again[k]];
         const std::wstring both[] = {join(read), join(english)};
-        const auto scores = reranker_->LogProbabilities(both, precedingText_);
+        const auto scores = reranker_->LogProbabilities(both, precedingText_, &rerankerMemory_);
         // The model reads katakana easily (果てに vs ヘイトに, 当て vs
         // アーテー), so a loanword less well known than a common one
         // (score 6: データ, ゲーム) takes more: ヘイト at 3 needs 29.
@@ -6294,6 +6294,7 @@ void JapaneseComposer::ClearChunk() noexcept {
 
 void JapaneseComposer::Clear() noexcept {
     ClearChunk();
+    rerankerMemory_.Clear();
     // Mixed typing: the chunks held for Enter go too, so they do not come
     // back with what is typed next.
     if (!settled_.empty()) {

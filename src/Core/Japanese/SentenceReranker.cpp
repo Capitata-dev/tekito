@@ -306,9 +306,68 @@ void SentenceReranker::NextLogits(const State& state, std::vector<float>& logits
     logSum = largest + std::log(SumExp(logits.data(), vocab_, largest));
 }
 std::vector<double> SentenceReranker::LogProbabilities(std::span<const std::wstring> sentences,
-                                                       std::wstring_view context) const {
+                                                       std::wstring_view context, Memory* memory) const {
     std::vector<double> result(sentences.size(), 0.0);
     if (!IsOpen() || sentences.empty()) return result;
+    if (memory) {
+        // At most this many pieces kept (each read one holds the model's
+        // state): past it, all is read again.
+        constexpr std::size_t kMostNodes = 2048;
+        auto& nodes = memory->nodes_;
+        if (nodes.empty() || memory->context_ != context || nodes.size() > kMostNodes) {
+            nodes.clear();
+            memory->context_ = std::wstring(context);
+            auto& root = nodes.emplace_back();
+            root.fresh = false;
+            root.state = Start(context);
+        }
+        std::vector<std::size_t> ends(sentences.size());
+        for (std::size_t s = 0; s < sentences.size(); ++s) {
+            auto pieces = Pieces(sentences[s]);
+            pieces.push_back(end_);
+            std::size_t at = 0;
+            for (const std::uint32_t piece : pieces) {
+                std::size_t next = 0;
+                for (const std::size_t child : nodes[at].children) {
+                    if (nodes[child].piece == piece) next = child;
+                }
+                if (next == 0) {
+                    next = nodes.size();
+                    nodes[at].children.push_back(next);
+                    Memory::Node child;
+                    child.piece = piece;
+                    child.parent = at;
+                    nodes.push_back(std::move(child));
+                }
+                at = next;
+            }
+            ends[s] = at;
+        }
+        // Each piece not read yet, after its parent (which comes first), as
+        // LogProbabilities reads them below: the same numbers.
+        std::vector<float> logits;
+        for (std::size_t at = 0; at < nodes.size(); ++at) {
+            const bool freshChild = std::any_of(nodes[at].children.begin(), nodes[at].children.end(),
+                                                [&](std::size_t child) { return nodes[child].fresh; });
+            if (!freshChild) continue;
+            if (!nodes[at].state) {
+                std::vector<std::size_t> path;
+                for (std::size_t up = at; !nodes[up].state; up = nodes[up].parent) path.push_back(up);
+                for (auto it = path.rbegin(); it != path.rend(); ++it) {
+                    nodes[*it].state = Step(*nodes[nodes[*it].parent].state, nodes[*it].piece);
+                }
+            }
+            float logSum = 0;
+            NextLogits(*nodes[at].state, logits, logSum);
+            for (const std::size_t child : nodes[at].children) {
+                if (!nodes[child].fresh) continue;
+                nodes[child].logProbability = nodes[at].logProbability + logits[nodes[child].piece] - logSum;
+                nodes[child].fresh = false;
+            }
+        }
+        for (std::size_t s = 0; s < sentences.size(); ++s) result[s] = nodes[ends[s]].logProbability;
+        return result;
+    }
     // The sentences' pieces as a tree: what they share at the start is
     // read once.
     struct Node {
@@ -356,13 +415,13 @@ std::vector<double> SentenceReranker::LogProbabilities(std::span<const std::wstr
 
 std::size_t SentenceReranker::Choose(std::span<const std::wstring> sentences, std::size_t ranked,
                                      double penalty, std::wstring_view context,
-                                     std::vector<std::pair<double, double>>* scored) const {
+                                     std::vector<std::pair<double, double>>* scored, Memory* memory) const {
     ranked = std::min(ranked, sentences.size());
     const std::size_t count = std::min(ranked, prior_.size());
     if (!IsOpen() || count + (sentences.size() - ranked) < 2 || count == 0) return 0;
     std::vector<std::wstring> read(sentences.begin(), sentences.begin() + static_cast<std::ptrdiff_t>(count));
     read.insert(read.end(), sentences.begin() + static_cast<std::ptrdiff_t>(ranked), sentences.end());
-    const auto logProbabilities = LogProbabilities(read, context);
+    const auto logProbabilities = LogProbabilities(read, context, memory);
     const double readChars = static_cast<double>(CodePoints(sentences[0]) + (rampWithContext_ ? CodePoints(context) : 0));
     const double ramp = rampChars_ > 0 ? std::min(1.0, readChars / static_cast<double>(rampChars_)) : 1.0;
     std::size_t best = 0;
