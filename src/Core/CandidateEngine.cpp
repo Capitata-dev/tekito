@@ -175,9 +175,15 @@ ConversionResult CandidateEngine::Convert(const ConversionRequest& request) cons
                                            request.options);
     if (request.options.spacelessEnglish) AddRunTogether(rawText, request.options, candidates);
     if (engineCapitalized) {
+        // A word written with a capital inside it (iPhone, macOS, eBay) keeps
+        // its own first letter: IPhone is never meant.
+        const auto ownCase = [](const std::wstring& text) {
+            return std::iswlower(text.front()) &&
+                   std::any_of(text.begin() + 1, text.end(), [](wchar_t c) { return std::iswupper(c) != 0; });
+        };
         for (auto& candidate : candidates) {
             if (!candidate.text.empty() && !candidate.isProtected &&
-                candidate.label != SemanticLabel::ProperNoun) {
+                candidate.label != SemanticLabel::ProperNoun && !ownCase(candidate.text)) {
                 candidate.text.front() =
                     static_cast<wchar_t>(std::towupper(candidate.text.front()));
             }
