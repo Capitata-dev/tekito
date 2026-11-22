@@ -5399,8 +5399,13 @@ void JapaneseComposer::CheckMixedByAi() {
         asked.push_back(std::move(text));
     }
     // Only the scores: the model's own writings are not offered here. Enter
-    // waits for them, as an answer after the text is committed is too late.
-    const auto answer = aiJudge_->Convert(keys, asked, mixContext_, false);
+    // waits for them, as an answer after the text is committed is too late,
+    // but only briefly: the application waits with it, and a late answer
+    // leaves the sentence as the sentence check chose it. (The evaluation,
+    // which waits for every answer, waits for this one too.)
+    constexpr std::chrono::milliseconds kEnterWait{500};
+    const auto answer = aiWaits_ ? aiJudge_->Convert(keys, asked, mixContext_, false)
+                                 : aiJudge_->ConvertWithin(keys, asked, mixContext_, false, kEnterWait);
     if (!answer || answer->scores.size() != asked.size()) return;
     std::size_t best = 0;
     for (std::size_t i = 1; i < asked.size(); ++i) {

@@ -183,7 +183,8 @@ public:
     // write the keys typed, and takes the one that reads better by more
     // than `margin` nats. `keepNotation`: not one that only writes the
     // chosen text otherwise. Enter waits for the answer (about 0.1 s on a
-    // GPU, 0.4 s on a processor) up to the judge's own wait. `count`: how
+    // GPU, 0.4 s on a processor) half a second at most; later, the sentence
+    // is committed as the sentence check chose it. `count`: how
     // many texts it reads (fewer answer sooner).
     void SetMixAi(bool on, double margin = 4.0, bool keepNotation = true, std::size_t count = 16) noexcept {
         mixAi_ = on;

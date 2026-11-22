@@ -202,12 +202,19 @@ AiHelperClient::AiHelperClient(AiModel model, AiDevice device, std::uint32_t gpu
 
 std::optional<AiConversion> AiHelperClient::Convert(std::wstring_view reading, std::span<const std::wstring> sentences,
                                                     std::wstring_view context, bool write) const {
+    return ConvertWithin(reading, sentences, context, write, wait_);
+}
+
+std::optional<AiConversion> AiHelperClient::ConvertWithin(std::wstring_view reading,
+                                                          std::span<const std::wstring> sentences,
+                                                          std::wstring_view context, bool write,
+                                                          std::chrono::milliseconds most) const {
     if (sentences.size() > aihelper::kMaxSentences || reading.size() > aihelper::kMaxCharacters) return std::nullopt;
     if (context.size() > aihelper::kMaxCharacters) context = context.substr(context.size() - aihelper::kMaxCharacters);
     aihelper::Asked asked{write ? aihelper::Request::Convert : aihelper::Request::Score, model_, device_,
                           std::wstring(context), std::wstring(reading),
                           std::vector<std::wstring>(sentences.begin(), sentences.end()), gpu_};
-    const auto reply = Exchange(aihelper::EncodeRequest(asked), Clock::now() + wait_);
+    const auto reply = Exchange(aihelper::EncodeRequest(asked), Clock::now() + std::min(wait_, most));
     if (!reply) return std::nullopt;
     auto answer = aihelper::DecodeReply(*reply);
     if (!answer || answer->scores.size() != sentences.size()) return std::nullopt;
