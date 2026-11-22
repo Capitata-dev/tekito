@@ -37,6 +37,8 @@ docker	Docker	always	en-US	TEKITO-owned
 docomo	docomo	always	en-US	TEKITO-owned
 dvd	DVD	always	en-US	TEKITO-owned
 edge	Edge	japanese	en-US	TEKITO-owned
+ekyc	eKYC	always	en-US	TEKITO-owned
+emmc	eMMC	always	en-US	TEKITO-owned
 excel	Excel	japanese	en-US	TEKITO-owned
 felica	FeliCa	always	en-US	TEKITO-owned
 figma	Figma	japanese	en-US	TEKITO-owned
@@ -50,6 +52,7 @@ gitlab	GitLab	always	en-US	TEKITO-owned
 gmail	Gmail	always	en-US	TEKITO-owned
 google	Google	always	en-US	TEKITO-owned
 gpu	GPU	always	en-US	TEKITO-owned
+grpc	gRPC	always	en-US	TEKITO-owned
 gui	GUI	always	en-US	TEKITO-owned
 hdd	HDD	always	en-US	TEKITO-owned
 hdmi	HDMI	always	en-US	TEKITO-owned
@@ -57,8 +60,10 @@ html	HTML	always	en-US	TEKITO-owned
 http	HTTP	always	en-US	TEKITO-owned
 https	HTTPS	always	en-US	TEKITO-owned
 id	ID	always	en-US	TEKITO-owned
+ideco	iDeCo	always	en-US	TEKITO-owned
 imac	iMac	always	en-US	TEKITO-owned
 ime	IME	always	en-US	TEKITO-owned
+imovie	iMovie	always	en-US	TEKITO-owned
 instagram	Instagram	always	en-US	TEKITO-owned
 intel	Intel	japanese	en-US	TEKITO-owned
 ios	iOS	always	en-US	TEKITO-owned
@@ -70,9 +75,11 @@ it	IT	japanese	en-US	TEKITO-owned
 javascript	JavaScript	always	en-US	TEKITO-owned
 jira	Jira	always	en-US	TEKITO-owned
 jpeg	JPEG	always	en-US	TEKITO-owned
+jquery	jQuery	always	en-US	TEKITO-owned
 jr	JR	always	en-US	TEKITO-owned
 json	JSON	always	en-US	TEKITO-owned
 kddi	KDDI	always	en-US	TEKITO-owned
+khz	kHz	always	en-US	TEKITO-owned
 kotlin	Kotlin	always	en-US	TEKITO-owned
 kubernetes	Kubernetes	always	en-US	TEKITO-owned
 lan	LAN	always	en-US	TEKITO-owned
@@ -146,11 +153,13 @@ unity	Unity	japanese	en-US	TEKITO-owned
 ups	UPS	always	en-US	TEKITO-owned
 url	URL	always	en-US	TEKITO-owned
 usb	USB	always	en-US	TEKITO-owned
+vcpu	vCPU	always	en-US	TEKITO-owned
 vlan	VLAN	always	en-US	TEKITO-owned
 vpn	VPN	always	en-US	TEKITO-owned
 vrchat	VRChat	always	en-US	TEKITO-owned
 vscode	VS Code	always	en-US	TEKITO-owned
 wan	WAN	always	en-US	TEKITO-owned
+watchos	watchOS	always	en-US	TEKITO-owned
 whatsapp	WhatsApp	always	en-US	TEKITO-owned
 wifi	Wi-Fi	always	en-US	TEKITO-owned
 windows	Windows	japanese	en-US	TEKITO-owned
