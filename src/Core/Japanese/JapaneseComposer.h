@@ -1037,6 +1037,10 @@ private:
     // MixLiveText's last conversion, by the reading it was for.
     mutable std::wstring mixLiveReading_;
     mutable std::wstring mixLiveText_;
+    // Its phrases, and the context it was converted after: typed on, the
+    // phrases before the last few stay (MixLiveText).
+    mutable std::vector<Phrase> mixLivePhrases_;
+    mutable std::uint16_t mixLiveContext_{0};
     const KanaSlips* slips_{nullptr};
     std::vector<Unit> units_;
     // Units before the caret; pending keys belong at the caret.

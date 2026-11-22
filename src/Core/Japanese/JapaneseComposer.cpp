@@ -892,6 +892,14 @@ void JapaneseComposer::UpdateLive() {
 bool JapaneseComposer::RefineLive() {
     if (!liveRefine_ || !pending_.empty()) return false;
     const std::wstring before = Preedit();
+    // Mix's live conversion: all of it converted again, as one, once
+    // phrases stayed while typing on (MixLiveText).
+    if (chunkJudge_ && mixLive_ && !IsConverted()) {
+        if (mixLivePhrases_.size() <= liveOpenPhrases_) return false;
+        mixLiveReading_.clear();
+        mixLivePhrases_.clear();
+        return Preedit() != before;
+    }
     return RebuildLive() && Preedit() != before;
 }
 
@@ -4947,10 +4955,18 @@ std::optional<std::wstring> JapaneseComposer::MixSplitShown(bool convert) const 
         bool english = false, japanese = false, ok = true;
         tailTaken = 0;
         // English run into Japanese, as Space splits it (meetinghananiji:
-        // meetingは何時), each run between punctuation on its own.
-        for (std::size_t start = 0; start < core.size() && ok;) {
+        // meetingは何時), each run between punctuation on its own: first how
+        // each run splits, then, when English and Japanese are both in them,
+        // the Japanese converted (Japanese alone shows otherwise).
+        struct Run {
+            std::size_t start, end;
+            std::vector<ChunkJudge::Piece> parts;
+        };
+        std::vector<Run> runs;
+        for (std::size_t start = 0; start < core.size();) {
             std::size_t end = core.find_first_of(L".,!?", start);
             if (end == std::wstring::npos) end = core.size();
+            runs.push_back({start, end, {}});
             if (end > start) {
                 const std::wstring_view run = std::wstring_view(core).substr(start, end - start);
                 constexpr std::size_t kTyping = 16;
@@ -5048,6 +5064,19 @@ std::optional<std::wstring> JapaneseComposer::MixSplitShown(bool convert) const 
                     }
                     if (parts.empty()) parts.push_back({true, std::wstring(run), std::wstring(run)});
                 }
+                runs.back().parts = std::move(parts);
+            }
+            start = end + 1;
+        }
+        const auto hasPiece = [&](bool inEnglish) {
+            return std::any_of(runs.begin(), runs.end(), [&](const Run& r) {
+                return std::any_of(r.parts.begin(), r.parts.end(), [&](const ChunkJudge::Piece& p) { return p.english == inEnglish; });
+            });
+        };
+        if (!hasPiece(true) || !hasPiece(false)) runs.clear();
+        for (const auto& [start, end, parts] : runs) {
+            if (!ok) break;
+            if (end > start) {
                 // English with Japanese stays in small letters at the start
                 // of a sentence too (LowerSentenceStarts).
                 const bool allEnglish = std::all_of(parts.begin(), parts.end(), [](const ChunkJudge::Piece& p) { return p.english; });
@@ -5081,7 +5110,6 @@ std::optional<std::wstring> JapaneseComposer::MixSplitShown(bool convert) const 
                 const auto mark = kanaOf(std::wstring_view(core).substr(end, 1));
                 text += mark ? *mark : std::wstring(1, core[end]);
             }
-            start = end + 1;
         }
         if (ok && english && japanese) liveSplitText_ = std::move(text);
     }
@@ -5113,20 +5141,46 @@ std::optional<std::wstring> JapaneseComposer::MixLiveText() const {
     for (auto& c : keys) c = static_cast<wchar_t>(std::towlower(c));
     while (!keys.empty() && std::wstring_view(L".,!?").find(keys.back()) != std::wstring_view::npos) keys.pop_back();
     if (keys.empty()) return std::nullopt;
-    const auto judged = JudgeChunk(keys);
+    // Long keys are judged without the syllable still being typed (...k):
+    // with it they read as no kana, and undoing a slip in all of them at
+    // each key costs much; the keys before it are judged once.
+    constexpr std::size_t kLongKeys = 20;
+    std::wstring_view judgedKeys = keys;
+    if (keys.size() >= kLongKeys && pending_.size() < keys.size()) judgedKeys.remove_suffix(pending_.size());
+    const auto judged = JudgeChunk(judgedKeys);
     if (judged.english || judged.either || TypedWithCapitals(keys)) return std::nullopt;
     // Keys an English word may still be typed from (meetin) stay as typed,
     // so the display does not turn Japanese, then English.
     if (chunkJudge_->MayStartEnglishWord(keys)) return std::nullopt;
     const std::wstring kana = reading.substr(0, end);
-    if (kana != mixLiveReading_) {
-        std::wstring text;
-        for (const auto& phrase : ConvertReading(kana, 0, context_, WordsWithEnglish())) {
-            if (phrase.candidates.empty()) return std::nullopt;
-            text += phrase.candidates.front().text;
+    if (kana != mixLiveReading_ || mixLiveContext_ != context_) {
+        // Typed on from what showed: the phrases before the last few stay as
+        // they showed and the rest is converted after them, as Japanese
+        // mode's live conversion does, so a key costs the same however long
+        // the sentence; typed otherwise, all of it.
+        std::vector<Phrase> phrases;
+        std::size_t from = 0;
+        std::uint16_t context = context_;
+        std::vector<std::wstring> words = WordsWithEnglish();
+        if (mixLiveContext_ == context_ && kana.size() > mixLiveReading_.size() && kana.starts_with(mixLiveReading_) &&
+            mixLivePhrases_.size() > liveOpenPhrases_) {
+            phrases.assign(mixLivePhrases_.begin(), mixLivePhrases_.end() - static_cast<std::ptrdiff_t>(liveOpenPhrases_));
+            from = phrases.back().begin + phrases.back().length;
+            std::wstring settled;
+            for (const auto& phrase : phrases) settled += phrase.candidates.front().text;
+            context = ContextAfter(settled, phrases.back().candidates.front().rightId);
+            AddContentWords(settled, words);
         }
+        for (auto& phrase : ConvertReading(kana, from, context, words)) {
+            if (phrase.candidates.empty()) return std::nullopt;
+            phrases.push_back(std::move(phrase));
+        }
+        std::wstring text;
+        for (const auto& phrase : phrases) text += phrase.candidates.front().text;
         mixLiveReading_ = kana;
+        mixLiveContext_ = context_;
         mixLiveText_ = std::move(text);
+        mixLivePhrases_ = std::move(phrases);
     }
     // The keys still pending follow, as typed (3時 then k), as in Japanese
     // mode's live conversion.
@@ -6233,6 +6287,8 @@ void JapaneseComposer::ClearChunk() noexcept {
     reconverted_ = false;
     keysShown_ = false;
     mixKanaShown_ = false;
+    mixLiveReading_.clear();
+    mixLivePhrases_.clear();
     ResetLive();
 }
 
