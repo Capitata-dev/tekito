@@ -87,6 +87,11 @@ std::string JsonEscape(std::string_view text) {
     return out;
 }
 
+// The most a file to import may be (Japan Post's: about 2 MB zipped, 18 MB
+// as CSV).
+constexpr std::uintmax_t kMostZipBytes = 32ull * 1024 * 1024;
+constexpr std::uintmax_t kMostCsvBytes = 128ull * 1024 * 1024;
+
 std::string ReadAll(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     if (!input) return {};
@@ -121,10 +126,13 @@ std::filesystem::path UnpackCsv(const std::filesystem::path& zip, const std::fil
     }
     constexpr DWORD kUnpackTimeout = 60000;
     const bool finished = WaitForSingleObject(process.hProcess, kUnpackTimeout) == WAIT_OBJECT_0;
+    DWORD exitCode = 1;
     if (!finished) TerminateProcess(process.hProcess, 1);
+    else GetExitCodeProcess(process.hProcess, &exitCode);
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
-    if (!finished) return {};
+    // Unpacked whole, or not used: part of a CSV is not the data.
+    if (!finished || exitCode != 0) return {};
     // tar.exe (bsdtar) leaves out members with .. and takes the leading /
     // off absolute ones; what is read must still be a plain file inside
     // `into`, not a link out of it.
@@ -214,26 +222,33 @@ std::optional<PostalCodeData> BuildPostalCodePack(std::string_view csvUtf8, std:
     std::error_code fileError;
     std::filesystem::create_directories(packDirectory, fileError);
     RemoveOldFiles(packDirectory);
+    // Every file written beside the pack first, and put in place only once
+    // all of them are: a write that fails leaves the pack as it was.
     const auto fresh = packDirectory / (std::wstring(kDataFile) + L".new");
+    const auto freshNotice = packDirectory / L"NOTICE.new";
+    const auto freshManifest = packDirectory / L"manifest.json.new";
+    const auto failed = [&] {
+        for (const auto& file : {fresh, freshNotice, freshManifest}) std::filesystem::remove(file, fileError);
+        error = PostalCodeImportError::WriteFailed;
+        return std::nullopt;
+    };
     {
         std::ofstream out(fresh, std::ios::binary | std::ios::trunc);
         for (const auto& row : rows) out << row << '\n';
-        if (!out) {
-            error = PostalCodeImportError::WriteFailed;
-            return std::nullopt;
-        }
+        out.close();
+        if (!out) return failed();
     }
-    const auto data = packDirectory / kDataFile;
-    if (!Replace(fresh, data)) {
-        std::filesystem::remove(fresh, fileError);
-        error = PostalCodeImportError::WriteFailed;
-        return std::nullopt;
+    {
+        std::ofstream notice(freshNotice, std::ios::binary | std::ios::trunc);
+        notice << "Postal codes and the addresses they cover, from Japan Post's postal\n"
+                  "code data (https://www.post.japanpost.jp/zipcode/download.html),\n"
+                  "added in TEKITO Settings. Japan Post claims no copyright in this data.\n";
+        notice.close();
+        if (!notice) return failed();
     }
-    std::ofstream(packDirectory / L"NOTICE", std::ios::binary | std::ios::trunc)
-        << "Postal codes and the addresses they cover, from Japan Post's postal\n"
-           "code data (https://www.post.japanpost.jp/zipcode/download.html),\n"
-           "added in TEKITO Settings. Japan Post claims no copyright in this data.\n";
-    std::ofstream manifest(packDirectory / L"manifest.json", std::ios::binary | std::ios::trunc);
+    const auto hash = FileSha256(fresh);
+    if (hash.empty()) return failed();
+    std::ofstream manifest(freshManifest, std::ios::binary | std::ios::trunc);
     manifest << "{\n"
              << "  \"pack_id\": \"japanese-zipcode\",\n"
              << "  \"display_name\": \"Japanese Postal Codes\",\n"
@@ -244,14 +259,19 @@ std::optional<PostalCodeData> BuildPostalCodePack(std::string_view csvUtf8, std:
              << "  \"format\": \"sorted-tsv-v1\",\n"
              << "  \"file\": \"zipcodes.tsv\",\n"
              << "  \"entry_count\": " << rows.size() << ",\n"
-             << "  \"sha256\": {\"file\": \"" << FileSha256(data) << "\"},\n"
+             << "  \"sha256\": {\"file\": \"" << hash << "\"},\n"
              << "  \"license\": \"Japan-Post-Postal-Code-Data\",\n"
              << "  \"source\": \"Japan Post utf_ken_all.zip, added in Settings\",\n"
              << "  \"notice_file\": \"NOTICE\"\n"
              << "}\n";
-    if (!manifest) {
-        error = PostalCodeImportError::WriteFailed;
-        return std::nullopt;
+    manifest.close();
+    if (!manifest) return failed();
+    // The data first, then what describes it: until the manifest is
+    // replaced, the old one's hash does not match and the pack is not used.
+    if (!Replace(fresh, packDirectory / kDataFile) ||
+        !MoveFileExW(freshNotice.c_str(), (packDirectory / L"NOTICE").c_str(), MOVEFILE_REPLACE_EXISTING) ||
+        !MoveFileExW(freshManifest.c_str(), (packDirectory / L"manifest.json").c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        return failed();
     }
     error = PostalCodeImportError::None;
     return PostalCodeData{rows.size(), std::move(version)};
@@ -264,16 +284,26 @@ std::optional<PostalCodeData> ImportPostalCodes(const std::filesystem::path& sou
     std::error_code fileError;
     if (!std::filesystem::is_regular_file(source, fileError)) return std::nullopt;
     auto csv = source;
-    const auto unpacked = std::filesystem::temp_directory_path(fileError) / L"TEKITO-zipcode";
+    // A folder of this run's own (another Settings may be importing too).
+    const auto unpacked = std::filesystem::temp_directory_path(fileError) /
+                          (L"TEKITO-zipcode-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+                           std::to_wstring(GetTickCount64()));
     const bool zipped = _wcsicmp(source.extension().c_str(), L".zip") == 0;
+    const auto done = [&](std::optional<PostalCodeData> result) {
+        if (zipped) std::filesystem::remove_all(unpacked, fileError);
+        return result;
+    };
     if (zipped) {
+        // Japan Post's zip is about 2 MB, its CSV about 18 MB: much more is
+        // not that data, and is not read into memory.
+        if (std::filesystem::file_size(source, fileError) > kMostZipBytes) return std::nullopt;
         csv = UnpackCsv(source, unpacked);
-        if (csv.empty()) return std::nullopt;
+        if (csv.empty()) return done(std::nullopt);
     }
+    const auto size = std::filesystem::file_size(csv, fileError);
+    if (fileError || size > kMostCsvBytes) return done(std::nullopt);
     const auto text = ReadAll(csv);
-    auto built = BuildPostalCodePack(text, MonthOf(source), packDirectory, error);
-    if (zipped) std::filesystem::remove_all(unpacked, fileError);
-    return built;
+    return done(BuildPostalCodePack(text, MonthOf(source), packDirectory, error));
 }
 
 bool RemovePostalCodes(const std::filesystem::path& packDirectory) {
