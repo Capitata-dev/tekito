@@ -99,7 +99,9 @@ def prepare(args) -> None:
             if left_out(text):
                 dropped += 1
                 continue
-            keys = re.sub(r" +", " ", keys)
+            context = (row.get("left_context") or "").replace("\n", "")
+            if rng.random() < NO_CONTEXT_SHARE:
+                context = ""
             f.write(json.dumps({"prompt": prompt(context, hiragana(reading)), "text": text}, ensure_ascii=False) + "\n")
             kept += 1
     print(f"{kept} examples, {dropped} left out as measured")
@@ -932,4 +934,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import sys
+    code = main()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)  # ROCm can hang at exit holding GPU memory
