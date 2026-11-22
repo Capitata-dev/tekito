@@ -644,9 +644,15 @@ bool SetPrivilege(const wchar_t* name, bool on) {
     change.PrivilegeCount = 1;
     change.Privileges[0].Attributes = on ? SE_PRIVILEGE_ENABLED : 0;
     bool wasOn = false;
+    // AdjustTokenPrivileges succeeds without changing a privilege setup does
+    // not hold (ERROR_NOT_ALL_ASSIGNED): then nothing was changed.
     if (LookupPrivilegeValueW(nullptr, name, &change.Privileges[0].Luid) &&
-        AdjustTokenPrivileges(token, FALSE, &change, sizeof(before), &before, &size) && before.PrivilegeCount == 1) {
+        AdjustTokenPrivileges(token, FALSE, &change, sizeof(before), &before, &size) &&
+        GetLastError() == ERROR_SUCCESS && before.PrivilegeCount == 1) {
         wasOn = (before.Privileges[0].Attributes & SE_PRIVILEGE_ENABLED) != 0;
+    } else {
+        // Left as it is: nothing to turn back.
+        wasOn = on;
     }
     CloseHandle(token);
     return wasOn;

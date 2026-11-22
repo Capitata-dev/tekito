@@ -78,9 +78,13 @@ $programFiles = [IO.Path]::GetFullPath($env:ProgramFiles).TrimEnd('\') + '\'
 if (-not $SkipRegistration -and -not $installRoot.StartsWith($programFiles, [StringComparison]::OrdinalIgnoreCase)) {
     throw "InstallRoot must be a folder in $env:ProgramFiles."
 }
+# An uninstall that stopped part way leaves the input method DLL renamed
+# aside (Tekito.Tsf.dll.old-<id>) for apps that still had it: running it
+# again finishes it.
 if ($doProgram -and (Test-Path -LiteralPath $installRoot) -and
     -not (Test-Path -LiteralPath (Join-Path $installRoot "install-manifest.json")) -and
-    @(Get-ChildItem -LiteralPath $installRoot -Filter "Tekito.Tsf*.dll" -File -Recurse -ErrorAction SilentlyContinue).Count -eq 0) {
+    @(Get-ChildItem -LiteralPath $installRoot -Filter "Tekito.Tsf*.dll" -File -Recurse -ErrorAction SilentlyContinue).Count -eq 0 -and
+    @(Get-ChildItem -LiteralPath $installRoot -Filter "Tekito.Tsf*.dll.old-*" -File -Recurse -ErrorAction SilentlyContinue).Count -eq 0) {
     throw "$installRoot does not look like a TEKITO installation."
 }
 if ($doProgram) {
