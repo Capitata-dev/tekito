@@ -2037,6 +2037,25 @@ void TestComposerLearning(const RomajiTable& table, const MiniPack& pack) {
 
 void TestKanjiSets() {
     using tekito::japanese::KanjiRange;
+    {
+        // A damaged line is passed over, never thrown at load time.
+        const auto file = std::filesystem::temp_directory_path() / L"tekito-kanji-sets-test.tsv";
+        {
+            std::ofstream out(file, std::ios::binary);
+            out << "\xE6\x9C\xAC\t1\r\n\xE9\xAC\xB1\tabc\n\xE6\xA1\x9C\t99999999999999999999\n";
+        }
+        tekito::japanese::KanjiSets loaded;
+        bool threw = false;
+        try {
+            Require(loaded.Load(file), "kanji sets load the good lines");
+        } catch (...) {
+            threw = true;
+        }
+        std::error_code ignored;
+        std::filesystem::remove(file, ignored);
+        Require(!threw && loaded.Allows(L"本", KanjiRange::Kyoiku) && !loaded.Allows(L"鬱", KanjiRange::Joyo),
+                "a level that is not a number is passed over, not thrown");
+    }
     tekito::japanese::KanjiSets sets;
     sets.Add(U'本', 1);  // 教育, 1年
     sets.Add(U'鬱', 8);  // 常用

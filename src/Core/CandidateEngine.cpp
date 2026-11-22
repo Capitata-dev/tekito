@@ -219,6 +219,8 @@ void CandidateEngine::AddRunTogether(std::wstring_view rawText, const Conversion
     if (rawText.size() < kShortest || !std::all_of(rawText.begin(), rawText.end(), [](wchar_t c) { return c >= L'a' && c <= L'z'; })) {
         return;
     }
+    // An engine made from a dictionary alone has no frequencies to split by.
+    if (!providers_) return;
     const auto& frequency = providers_->shared->frequencyProvider;
     if (frequency.Score(rawText) >= kListed) return;
     const auto score = [&](std::wstring_view word) { return frequency.Score(word); };

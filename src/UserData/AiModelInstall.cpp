@@ -64,8 +64,20 @@ bool RemoveWhenFree(const std::filesystem::path& directory) {
 
 }  // namespace
 
+bool IsPlainPackId(std::wstring_view packId) noexcept {
+    // A pack's name is one folder name of its own (japanese-core,
+    // ai-runtime): never a path, so nothing outside the data folder is
+    // removed or replaced.
+    if (packId.empty() || packId.size() > 64 || packId.front() == L'-') return false;
+    for (const wchar_t c : packId) {
+        if (!((c >= L'a' && c <= L'z') || (c >= L'0' && c <= L'9') || c == L'-')) return false;
+    }
+    return true;
+}
+
 AiModelInstallError InstallAiModelPack(const std::filesystem::path& zip, std::string_view sha256,
                                        std::wstring_view packId, const std::filesystem::path& dataRoot) {
+    if (!IsPlainPackId(packId)) return AiModelInstallError::Invalid;
     if (FileSha256(zip) != sha256) return AiModelInstallError::Checksum;
     std::error_code error;
     const auto unpacked = dataRoot / (std::wstring(packId) + L".download");
@@ -94,6 +106,9 @@ AiModelInstallError InstallAiModelPack(const std::filesystem::path& zip, std::st
 AiModelInstallError InstallDataPacks(const std::filesystem::path& zip, std::string_view sha256,
                                      const std::vector<std::wstring>& packIds, const std::filesystem::path& dataRoot) {
     if (packIds.empty()) return AiModelInstallError::Invalid;
+    for (const auto& packId : packIds) {
+        if (!IsPlainPackId(packId)) return AiModelInstallError::Invalid;
+    }
     if (FileSha256(zip) != sha256) return AiModelInstallError::Checksum;
     std::error_code error;
     std::filesystem::create_directories(dataRoot, error);
@@ -119,6 +134,7 @@ AiModelInstallError InstallDataPacks(const std::filesystem::path& zip, std::stri
 }
 
 bool RemoveAiModelPack(std::wstring_view packId, const std::filesystem::path& dataRoot) {
+    if (!IsPlainPackId(packId)) return false;
     const auto target = dataRoot / std::wstring(packId);
     std::error_code error;
     if (!std::filesystem::exists(target, error)) return true;
@@ -127,6 +143,7 @@ bool RemoveAiModelPack(std::wstring_view packId, const std::filesystem::path& da
 }
 
 bool AiModelPackInstalled(std::wstring_view packId, const std::filesystem::path& dataRoot) {
+    if (!IsPlainPackId(packId)) return false;
     std::error_code error;
     const auto pack = dataRoot / std::wstring(packId);
     return std::filesystem::is_regular_file(pack / L"manifest.json", error) &&

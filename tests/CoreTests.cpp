@@ -22,6 +22,7 @@
 #include "UserData/UserDataEncryption.h"
 #include "UserData/UserDictionaryFile.h"
 #include "UserData/DataPackValidation.h"
+#include "UserData/AiModelInstall.h"
 #include "UserData/ImeDictionaryImport.h"
 #include "UserData/PostalCodeImport.h"
 #include "sqlite3.h"
@@ -653,6 +654,10 @@ void TestCandidateEngine() {
     Require(lowerCandidates[0].text == L"name", "lowercase neme stays lowercase");
     Require(lowerCandidates[1].text == L"neme" && lowerCandidates[1].isOriginal,
             "generated correction keeps original candidate near the top");
+
+    tekito::ConversionRequest runTogether;
+    runTogether.rawText = L"seeyouonmonday";
+    (void)engine.Convert(runTogether);  // An engine with a dictionary alone has no frequencies: no split, no crash.
 
     tekito::ConversionRequest todayRequest;
     todayRequest.rawText = L"today";
@@ -1969,6 +1974,12 @@ void TestPostalCodeImport() {
 }
 
 void TestDataPackValidation() {
+    Require(tekito::userdata::IsPlainPackId(L"japanese-core") && tekito::userdata::IsPlainPackId(L"ai-runtime"),
+            "pack names are plain folder names");
+    Require(!tekito::userdata::IsPlainPackId(L"") && !tekito::userdata::IsPlainPackId(L"..") &&
+                !tekito::userdata::IsPlainPackId(L"../outside") && !tekito::userdata::IsPlainPackId(L"a\\b") &&
+                !tekito::userdata::IsPlainPackId(L"C:") && !tekito::userdata::IsPlainPackId(L"Japanese-Core"),
+            "a pack name is never a path");
     const auto dataRoot = tekito::ExternalLexiconProvider::DataPackRoot();
     for (const auto& pack : {L"standard-english", L"wikipedia-common-misspellings",
                              L"dictionary-display", L"frequency", L"phrase", L"slang",
@@ -2056,6 +2067,33 @@ void TestRankingDataBoundaries() {
     ranker.RankCorrections(personalized, 4);
     Require(personalized.front().entry.raw == L"meme",
             "candidate ranker applies a bounded learned preference among similar candidates");
+
+    {
+        // Learning past a threshold and the combined score could make a
+        // circle (A before B before C before A); the order is the same
+        // whatever order the candidates came in.
+        const tekito::BuiltinLexiconEntry a{L"aaaa", {}, tekito::SemanticLabel::Original, tekito::SemanticLabel::None, true, true};
+        const tekito::BuiltinLexiconEntry b{L"bbbb", {}, tekito::SemanticLabel::Original, tekito::SemanticLabel::None, true, true};
+        const tekito::BuiltinLexiconEntry c{L"cccc", {}, tekito::SemanticLabel::Original, tekito::SemanticLabel::None, true, true};
+        std::vector<tekito::CorrectionCandidate> base{
+            {1, false, false, false, false, false, a, L"aaaa", {9.82, 0.0, -0.14}},
+            {1, false, false, false, false, false, b, L"bbbb", {6.31, 0.0, 0.18}},
+            {1, false, false, false, false, false, c, L"cccc", {0.19, 0.0, 0.20}},
+        };
+        std::vector<std::wstring> first;
+        std::sort(base.begin(), base.end(), [](const auto& l, const auto& r) { return l.entry.raw < r.entry.raw; });
+        bool same = true;
+        do {
+            auto ranked = base;
+            ranker.RankCorrections(ranked, 4);
+            std::vector<std::wstring> order;
+            for (const auto& candidate : ranked) order.emplace_back(candidate.entry.raw);
+            if (first.empty()) first = order;
+            same = same && order == first;
+        } while (std::next_permutation(base.begin(), base.end(),
+                                       [](const auto& l, const auto& r) { return l.entry.raw < r.entry.raw; }));
+        Require(same, "the ranker's order does not depend on the order candidates came in");
+    }
 }
 
 void TestCompositeLexiconProvider() {
@@ -2660,6 +2698,17 @@ void TestUserDataEncryption() {
         Require(rescued.Open() && rescued.LoadRecentConversions(conversions) && conversions.size() == 2,
                 "with everything that was kept");
     }
+    Require(!tekito::userdata::RescueDatabase(database, tekito::userdata::UserKeyPath(database), "0000-0000-0000-0000-0000-0000",
+                                              plain) &&
+                fs::exists(plain) && !tekito::userdata::DatabaseEncrypted(plain),
+            "a rescue that fails leaves the earlier rescue as it was");
+    Require(!tekito::userdata::RescueDatabase(database, tekito::userdata::UserKeyPath(database), lower, database) &&
+                tekito::userdata::DatabaseEncrypted(database) && recalled(L"SECRETWORDTWO"),
+            "a rescue never writes over the database it reads");
+    Require(!tekito::userdata::RescueDatabase(database, tekito::userdata::UserKeyPath(database), lower,
+                                              tekito::userdata::UserKeyPath(database)) &&
+                recalled(L"SECRETWORDTWO"),
+            "nor over its key");
 
     {
         // A new recovery code while another connection has the database: a

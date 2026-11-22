@@ -1,5 +1,6 @@
 #include "Core/Japanese/KanjiSets.h"
 
+#include <charconv>
 #include <fstream>
 #include <string>
 
@@ -52,7 +53,15 @@ bool KanjiSets::Load(const std::filesystem::path& file) {
     for (std::string line; std::getline(input, line);) {
         const auto tab = line.find('\t');
         if (tab == std::string::npos || tab + 1 >= line.size()) continue;
-        Add(FirstCodePoint(std::string_view(line).substr(0, tab)), std::stoi(line.substr(tab + 1)));
+        // A line whose level is not a number is passed over (std::stoi
+        // would throw, and nothing at load time catches it).
+        int level = 0;
+        const char* begin = line.data() + tab + 1;
+        const char* end = line.data() + line.size();
+        if (end > begin && end[-1] == '\r') --end;
+        const auto [at, error] = std::from_chars(begin, end, level);
+        if (error != std::errc{} || at == begin) continue;
+        Add(FirstCodePoint(std::string_view(line).substr(0, tab)), level);
     }
     return !Empty();
 }
