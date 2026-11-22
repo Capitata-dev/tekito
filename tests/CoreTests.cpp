@@ -1755,6 +1755,30 @@ void TestUserDictionaryImportExport() {
                 HasFlag(entry->policyFlags, tekito::CandidatePolicyProtect) &&
                 entry->caseSensitive && !entry->enabled,
             "user dictionary import preserves escaped text and policy metadata");
+    auto partial = path;
+    partial += L".partial";
+    Require(!std::filesystem::exists(partial), "an export leaves nothing beside the file");
+    // A flag that is neither 0 nor 1 turns the file away; Windows' line
+    // endings are read.
+    const auto writeFile = [&](const std::string& body) {
+        std::ofstream(path, std::ios::binary) << body;
+    };
+    const std::string head = "TEKITO_USER_DICTIONARY_V1\r\nid\traw_hex\tcandidate_hex\tpolicy_flags\tcase_sensitive\tenabled\r\n";
+    writeFile(head + "3\t0061\t0062\t0\t0\t1\r\n");
+    tekito::UserDictionary crlf;
+    Require(tekito::userdata::ImportUserDictionary(path, crlf) && crlf.Find(3) && crlf.Find(3)->enabled,
+            "user dictionary import reads Windows line endings");
+    writeFile(head + "3\t0061\t0062\t0\t0\tyes\r\n");
+    tekito::UserDictionary badFlag;
+    Require(!tekito::userdata::ImportUserDictionary(path, badFlag), "a flag that is not 0 or 1 is turned away");
+    std::string many = head;
+    for (int i = 1; i <= 20000; ++i) many += std::to_string(i) + "\t0061\t0062\t0\t0\t1\n";
+    writeFile(many);
+    tekito::UserDictionary big;
+    const auto start = std::chrono::steady_clock::now();
+    Require(tekito::userdata::ImportUserDictionary(path, big) && big.Entries().size() == 20000 &&
+                std::chrono::steady_clock::now() - start < std::chrono::seconds(5),
+            "many words are imported without looking through all of them for each");
     std::filesystem::remove(path, error);
 }
 

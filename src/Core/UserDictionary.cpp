@@ -6,8 +6,13 @@ namespace tekito {
 
 bool UserDictionary::Add(UserDictionaryEntry entry) {
     if (entry.id == 0 || entry.raw.empty() || entry.candidate.empty()) return false;
-    if (Find(entry.id) != nullptr) return false;
-    entries_.push_back(std::move(entry));
+    if (!ids_.insert(entry.id).second) return false;
+    try {
+        entries_.push_back(std::move(entry));
+    } catch (...) {
+        ids_.erase(entry.id);
+        throw;
+    }
     return true;
 }
 
@@ -16,6 +21,7 @@ bool UserDictionary::Remove(UserDictionaryEntryId id) noexcept {
                                  [id](const auto& entry) { return entry.id == id; });
     if (it == entries_.end()) return false;
     entries_.erase(it);
+    ids_.erase(id);
     return true;
 }
 

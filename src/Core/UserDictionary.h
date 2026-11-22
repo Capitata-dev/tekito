@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace tekito {
@@ -29,6 +30,8 @@ public:
 
 private:
     std::vector<UserDictionaryEntry> entries_;
+    // Their ids, so adding many does not look through all of them each time.
+    std::unordered_set<UserDictionaryEntryId> ids_;
 };
 
 }  // namespace tekito
