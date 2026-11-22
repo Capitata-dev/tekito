@@ -8,6 +8,7 @@
 #endif
 #include <windows.h>
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <iterator>
@@ -249,6 +250,53 @@ bool AiModelPackInstalled(std::wstring_view packId, const std::filesystem::path&
     const auto pack = dataRoot / std::wstring(packId);
     return std::filesystem::is_regular_file(pack / L"manifest.json", error) &&
            std::filesystem::is_regular_file(pack / L"model.onnx", error);
+}
+
+std::wstring AiPackVersion(std::wstring_view packId, const std::filesystem::path& dataRoot) {
+    if (!IsPlainPackId(packId)) return {};
+    std::ifstream in(dataRoot / std::wstring(packId) / L"manifest.json", std::ios::binary);
+    const std::string manifest((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const auto key = manifest.find("\"version\"");
+    const auto open = key == std::string::npos ? key : manifest.find('"', manifest.find(':', key) + 1);
+    const auto close = open == std::string::npos ? open : manifest.find('"', open + 1);
+    if (close == std::string::npos || close - open > 33) return {};
+    return std::wstring(manifest.begin() + static_cast<std::ptrdiff_t>(open) + 1,
+                        manifest.begin() + static_cast<std::ptrdiff_t>(close));
+}
+
+bool OlderVersion(std::wstring_view installed, std::wstring_view wanted) noexcept {
+    // Each part as a number; a part not there counts as 0.
+    const auto parts = [](std::wstring_view version, std::vector<unsigned long>& out) {
+        unsigned long part = 0;
+        bool digit = false;
+        for (const wchar_t c : version) {
+            if (c >= L'0' && c <= L'9') {
+                if (part > 100'000'000) return false;
+                part = part * 10 + static_cast<unsigned long>(c - L'0');
+                digit = true;
+            } else if (c == L'.' && digit) {
+                out.push_back(part);
+                part = 0;
+                digit = false;
+            } else {
+                return false;
+            }
+        }
+        if (!digit) return false;
+        out.push_back(part);
+        return true;
+    };
+    try {
+        std::vector<unsigned long> have, want;
+        if (!parts(wanted, want)) return false;
+        if (!parts(installed, have)) return true;
+        const std::size_t n = std::max(have.size(), want.size());
+        have.resize(n, 0);
+        want.resize(n, 0);
+        return have < want;
+    } catch (...) {
+        return false;
+    }
 }
 
 bool AiRuntimeInstalled(const std::filesystem::path& dataRoot) {

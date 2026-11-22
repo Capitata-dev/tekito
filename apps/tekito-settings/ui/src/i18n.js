@@ -267,6 +267,10 @@ const en = {
     downloading: "Downloading",
     remove: "Remove the model",
     removed: "Removed the AI model",
+    update: "Update",
+    updateAvailable: "A newer version is available.",
+    updateTitle: "Update the AI model?",
+    updateBody: (size) => `Downloads about ${size} and replaces the current version.`,
     device: {
       title: "Run AI on",
       description: "Runs on the CPU by default. Choose GPU or NPU to ease the load on the CPU.",
@@ -732,6 +736,10 @@ const ja = {
     downloading: "ダウンロード中",
     remove: "モデルを削除",
     removed: "AI モデルを削除しました",
+    update: "更新",
+    updateAvailable: "新しい版があります",
+    updateTitle: "AI モデルを更新しますか？",
+    updateBody: (size) => `約 ${size} がダウンロードされ、今の版と入れ替わります。`,
     device: {
       title: "AI の処理",
       description: "通常は CPU で処理されます。GPU や NPU を選ぶと、CPU の負担を減らせます",

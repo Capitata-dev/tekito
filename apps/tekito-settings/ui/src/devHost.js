@@ -18,6 +18,8 @@ const japaneseInstalled = new URLSearchParams(window.location.search).get("japan
 const detectedJapaneseKeyboard = new URLSearchParams(window.location.search).get("keyboard") !== "us";
 // "?ai=1": the light AI model is there and chosen, so Home asks AI.
 const aiInstalled = new URLSearchParams(window.location.search).get("ai") === "1";
+// ?update=1: the light model there is an older version.
+const aiUpdate = new URLSearchParams(window.location.search).get("update") === "1";
 
 // A stand-in for AI in Home's conversation: a few requests as words to look
 // for, and the reply, changes and pointers AI would give for them.
@@ -82,7 +84,7 @@ function initialState() {
   return {
     postalCodes: { installed: false },
     encryption: { wanted: false, encrypted: false },
-    aiModels: { light: { installed: aiInstalled, bytes: 358021668 }, strong: { installed: false, bytes: 1587553900 },
+    aiModels: { light: { installed: aiInstalled, bytes: 358021668, update: aiInstalled && aiUpdate, updateBytes: 358021668 }, strong: { installed: false, bytes: 1587553900 },
       settings: { installed: aiInstalled && new URLSearchParams(window.location.search).get("settingsai") !== "0", bytes: 357791102 },
       runtime: { installed: aiInstalled, bytes: 6000000, windowsMl: false, windowsMlBytes: 20000000, windowsMlDownloading: false },
       downloading: 0, error: "",
@@ -338,7 +340,7 @@ export function installMockHost() {
         state.aiModels = { ...state.aiModels, downloading: message.model };
         window.setTimeout(() => {
           const key = message.model === 1 ? "light" : "strong";
-          state.aiModels = { ...state.aiModels, [key]: { ...state.aiModels[key], installed: true },
+          state.aiModels = { ...state.aiModels, [key]: { ...state.aiModels[key], installed: true, update: false },
             runtime: { ...state.aiModels.runtime, installed: true }, downloading: 0 };
           state.settings.japaneseSentenceModel = message.model;
           const data = JSON.stringify({ type: "state.changed", state });

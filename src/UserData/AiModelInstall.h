@@ -35,6 +35,13 @@ enum class AiModelInstallError { None, Download, Checksum, Unpack, Invalid, InUs
 
 // Whether a valid copy of the pack is in `dataRoot`.
 [[nodiscard]] bool AiModelPackInstalled(std::wstring_view packId, const std::filesystem::path& dataRoot);
+// The version its manifest gives ("2026.11"); empty when the pack is not
+// there.
+[[nodiscard]] std::wstring AiPackVersion(std::wstring_view packId, const std::filesystem::path& dataRoot);
+// Whether `installed` is an older version than `wanted`, both dotted
+// numbers (2026.11 < 2026.11.2 < 2026.12); a version that is not one is
+// older than any.
+[[nodiscard]] bool OlderVersion(std::wstring_view installed, std::wstring_view wanted) noexcept;
 // Whether what runs the models (the ai-runtime pack, speaking this
 // build's protocol) is in `dataRoot`.
 [[nodiscard]] bool AiRuntimeInstalled(const std::filesystem::path& dataRoot);

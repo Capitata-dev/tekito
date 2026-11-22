@@ -183,18 +183,21 @@ bool PrepareNpu() {
 
 // The AI models (japanese::AiModel 1 and 2) Settings downloads, from
 // TEKITO's releases, each checked against its SHA-256
-// (scripts/ja/build-japanese-ai-packs.py prints them).
+// (scripts/ja/build-japanese-ai-packs.py prints them), and the version its
+// manifest gives: a copy there of an older version is offered to be
+// replaced (nothing is looked up online for it).
 struct AiModelInfo {
     const wchar_t* pack;
     const wchar_t* url;
     const char* sha256;
     unsigned long long bytes;
+    const wchar_t* version;
 };
 constexpr AiModelInfo kAiModels[] = {
     {L"japanese-ai-light", L"https://github.com/Capitata-dev/tekito/releases/download/ai-models-2/TEKITO-japanese-ai-light.zip",
-     "44A8FA9CD516DC169CC0F03449E946B299AE44C440C8EFB027128A834819DD04", 358021668ull},
+     "44A8FA9CD516DC169CC0F03449E946B299AE44C440C8EFB027128A834819DD04", 358021668ull, L"2026.11"},
     {L"japanese-ai-strong", L"https://github.com/Capitata-dev/tekito/releases/download/ai-models-2/TEKITO-japanese-ai-strong.zip",
-     "23EECE917B66F960BB7DE9FA44C6AA5CC78B49652B63BA7FE3B1256870E6FFFC", 1587553900ull},
+     "23EECE917B66F960BB7DE9FA44C6AA5CC78B49652B63BA7FE3B1256870E6FFFC", 1587553900ull, L"2026.11"},
 };
 // What runs them (TekitoAI.exe and ONNX Runtime, on the processor),
 // downloaded with the first model and removed with the last; and the copy
@@ -203,10 +206,10 @@ constexpr AiModelInfo kAiModels[] = {
 // model (ai-models-2's copies do not, and are replaced).
 constexpr AiModelInfo kAiRuntime{
     L"ai-runtime", L"https://github.com/Capitata-dev/tekito/releases/download/ai-models-3/TEKITO-ai-runtime.zip",
-    "AF216815E7B721890841A558D0F4F157DC67C6887F29817D72342482DC8ED6C5", 6380188ull};
+    "AF216815E7B721890841A558D0F4F157DC67C6887F29817D72342482DC8ED6C5", 6380188ull, L"2026.11"};
 constexpr AiModelInfo kAiRuntimeWindowsMl{
     L"ai-runtime", L"https://github.com/Capitata-dev/tekito/releases/download/ai-models-3/TEKITO-ai-runtime-windows-ml.zip",
-    "003B574CB4874F37415B29A3B214CC555032D27197702A10140DE8195DB3AE14", 18131689ull};
+    "003B574CB4874F37415B29A3B214CC555032D27197702A10140DE8195DB3AE14", 18131689ull, L"2026.11"};
 
 tekito::userdata::AiModelInstallError DownloadAiPack(const AiModelInfo& pack, const std::filesystem::path& root);
 
@@ -215,7 +218,7 @@ tekito::userdata::AiModelInstallError DownloadAiPack(const AiModelInfo& pack, co
 // one is already there.
 constexpr AiModelInfo kSettingsAi{
     L"settings-ai", L"https://github.com/Capitata-dev/tekito/releases/download/ai-models-3/TEKITO-settings-ai.zip",
-    "8099BB4BF9266F6C96EFBD875DAD28DE231E40A14220D62DFAA54CC621307FA8", 357791102ull};
+    "8099BB4BF9266F6C96EFBD875DAD28DE231E40A14220D62DFAA54CC621307FA8", 357791102ull, L"2026.11"};
 
 // Home's AI, asked how likely each text reads after what the user asked for
 // (`prompt`) against after nothing (`base`): ln p(text | prompt) - ln p(text
@@ -268,11 +271,29 @@ std::optional<std::vector<double>> ScoreTexts(const std::wstring& prompt, const 
     return scores;
 }
 
-// What runs the models, when it is not there or is too old to run
-// Settings' model: the copy with Windows ML when that is the one there.
+// The copy of what runs the models this Settings would download: with
+// Windows ML when that is the one there.
+const AiModelInfo& AiRuntimeFor(const std::filesystem::path& root) {
+    return tekito::userdata::AiRuntimeHasWindowsMl(root) ? kAiRuntimeWindowsMl : kAiRuntime;
+}
+
+// Whether a copy of `pack` is there but older than the one this Settings
+// downloads.
+bool AiPackOutdated(const AiModelInfo& pack, const std::filesystem::path& root) {
+    const auto installed = tekito::userdata::AiPackVersion(pack.pack, root);
+    return !installed.empty() && tekito::userdata::OlderVersion(installed, pack.version);
+}
+
+// Whether what runs the models is too old: it does not run Settings'
+// model, or is an older version.
+bool AiRuntimeOutdated(const std::filesystem::path& root) {
+    return !tekito::userdata::AiRuntimeRunsSettings(root) || AiPackOutdated(AiRuntimeFor(root), root);
+}
+
+// What runs the models, when it is not there or is too old.
 tekito::userdata::AiModelInstallError UpdateAiRuntime(const std::filesystem::path& root) {
-    if (tekito::userdata::AiRuntimeRunsSettings(root)) return tekito::userdata::AiModelInstallError::None;
-    return DownloadAiPack(tekito::userdata::AiRuntimeHasWindowsMl(root) ? kAiRuntimeWindowsMl : kAiRuntime, root);
+    if (!AiRuntimeOutdated(root)) return tekito::userdata::AiModelInstallError::None;
+    return DownloadAiPack(AiRuntimeFor(root), root);
 }
 
 // Downloads what runs the models when it is not there yet, then `model`
@@ -283,7 +304,9 @@ tekito::userdata::AiModelInstallError DownloadAiModel(int model, const std::file
     if (const auto error = DownloadAiPack(kAiModels[model - 1], root); error != AiModelInstallError::None) return error;
     // Home's AI comes with the first model; without it, conversion is still
     // there, and Home offers to download it.
-    if (!tekito::userdata::AiModelPackInstalled(kSettingsAi.pack, root)) (void)DownloadAiPack(kSettingsAi, root);
+    if (!tekito::userdata::AiModelPackInstalled(kSettingsAi.pack, root) || AiPackOutdated(kSettingsAi, root)) {
+        (void)DownloadAiPack(kSettingsAi, root);
+    }
     return AiModelInstallError::None;
 }
 
@@ -2714,9 +2737,21 @@ private:
         std::wstring json = L"{";
         const wchar_t* names[] = {L"light", L"strong"};
         for (std::size_t i = 0; i < std::size(kAiModels); ++i) {
+            // An older version there: downloading it again replaces it
+            // (and what runs it, and Settings' model, when they are older).
+            const auto root = AiDataRoot();
+            const bool installed = tekito::userdata::AiModelPackInstalled(kAiModels[i].pack, root);
+            const bool modelOld = installed && AiPackOutdated(kAiModels[i], root);
+            const bool runtimeOld = installed && tekito::userdata::AiRuntimeInstalled(root) &&
+                                    AiPackOutdated(AiRuntimeFor(root), root);
+            const bool settingsOld = installed && AiPackOutdated(kSettingsAi, root);
+            const auto updateBytes = (modelOld ? kAiModels[i].bytes : 0ull) +
+                                     (runtimeOld ? AiRuntimeFor(root).bytes : 0ull) +
+                                     (settingsOld ? kSettingsAi.bytes : 0ull);
             json += std::wstring(i ? L"," : L"") + L"\"" + names[i] + L"\":{\"installed\":" +
-                    (tekito::userdata::AiModelPackInstalled(kAiModels[i].pack, AiDataRoot()) ? L"true" : L"false") +
-                    L",\"bytes\":" + std::to_wstring(kAiModels[i].bytes) + L"}";
+                    (installed ? L"true" : L"false") + L",\"bytes\":" + std::to_wstring(kAiModels[i].bytes) +
+                    L",\"update\":" + (updateBytes ? L"true" : L"false") + L",\"updateBytes\":" +
+                    std::to_wstring(updateBytes) + L"}";
         }
         // Ready only with what runs it too; else what is left to download
         // (an older copy of what runs the models, replaced).

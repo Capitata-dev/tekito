@@ -2061,7 +2061,17 @@ void TestDataPackInstall() {
     Require(tekito::userdata::InstallDataPacks(good, std::string(64, '0'), {L"test-pack"}, root) ==
                 tekito::userdata::AiModelInstallError::Checksum,
             "a zip that is not the one expected is turned away");
+    Require(tekito::userdata::AiPackVersion(L"test-pack", root) == L"1" &&
+                tekito::userdata::AiPackVersion(L"no-such-pack", root).empty(),
+            "a pack's version is read from its manifest");
     fs::remove_all(work, error);
+    using tekito::userdata::OlderVersion;
+    Require(OlderVersion(L"2026.11", L"2026.12") && OlderVersion(L"2026.11", L"2026.11.2") &&
+                OlderVersion(L"2026.9", L"2026.11") && OlderVersion(L"", L"2026.11") && OlderVersion(L"x", L"2026.11"),
+            "an older version is found older, part by part as numbers");
+    Require(!OlderVersion(L"2026.11", L"2026.11") && !OlderVersion(L"2026.11.0", L"2026.11") &&
+                !OlderVersion(L"2026.12", L"2026.11") && !OlderVersion(L"2026.11", L"bad"),
+            "the same or a newer version is not offered to be replaced");
 }
 
 class TestFrequencyProvider final : public tekito::IFrequencyProvider {
