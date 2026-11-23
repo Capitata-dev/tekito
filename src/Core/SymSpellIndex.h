@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 namespace tekito {
@@ -35,8 +34,18 @@ public:
                                                         std::size_t maxDistance) const;
 
 private:
+    // Each word and each of its deletions as a 32-bit hash beside the word's
+    // number, sorted: 8 bytes an entry (a map of the deletions' strings took
+    // some 400 MB for the English lexicon, in every application TEKITO
+    // runs in). A hash shared by chance only adds a word to check; the edit
+    // distance decides.
+    struct Posting {
+        std::uint32_t hash;
+        std::uint32_t word;
+        auto operator<=>(const Posting&) const = default;
+    };
     std::vector<std::string> words_;
-    std::unordered_map<std::string, std::vector<std::uint32_t>> deletes_;
+    std::vector<Posting> postings_;
 };
 
 }  // namespace tekito

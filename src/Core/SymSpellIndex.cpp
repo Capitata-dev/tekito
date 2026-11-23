@@ -29,6 +29,16 @@ void CollectDeletes(std::string_view word, std::size_t remainingDepth,
     }
 }
 
+// FNV-1a, 32 bits.
+std::uint32_t HashOf(std::string_view text) noexcept {
+    std::uint32_t hash = 2166136261u;
+    for (const char c : text) {
+        hash ^= static_cast<unsigned char>(c);
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
 }  // namespace
 
 std::size_t BoundedEditDistance(std::string_view left, std::string_view right, std::size_t limit) {
@@ -73,22 +83,21 @@ std::size_t BoundedEditDistance(std::string_view left, std::string_view right, s
 
 void SymSpellIndex::Build(std::vector<std::string> words) {
     words_ = std::move(words);
-    deletes_.clear();
-    deletes_.reserve(words_.size() * 4);
+    postings_.clear();
+    postings_.reserve(words_.size() * 40);
 
     std::unordered_set<std::string> seenForWord;
     for (std::uint32_t index = 0; index < words_.size(); ++index) {
         const auto& word = words_[index];
-        auto& exactBucket = deletes_[word];
-        if (exactBucket.empty() || exactBucket.back() != index) exactBucket.push_back(index);
-
+        postings_.push_back({HashOf(word), index});
         seenForWord.clear();
         seenForWord.insert(word);
-        CollectDeletes(word, kMaxSupportedDistance, seenForWord, [&](const std::string& variant) {
-            auto& bucket = deletes_[variant];
-            if (bucket.empty() || bucket.back() != index) bucket.push_back(index);
-        });
+        CollectDeletes(word, kMaxSupportedDistance, seenForWord,
+                       [&](const std::string& variant) { postings_.push_back({HashOf(variant), index}); });
     }
+    std::sort(postings_.begin(), postings_.end());
+    postings_.erase(std::unique(postings_.begin(), postings_.end()), postings_.end());
+    postings_.shrink_to_fit();
 }
 
 std::vector<std::string_view> SymSpellIndex::Lookup(std::string_view query,
@@ -99,9 +108,9 @@ std::vector<std::string_view> SymSpellIndex::Lookup(std::string_view query,
 
     std::unordered_set<std::uint32_t> candidateIndices;
     const auto considerBucket = [&](const std::string& key) {
-        const auto it = deletes_.find(key);
-        if (it == deletes_.end()) return;
-        for (const auto wordIndex : it->second) candidateIndices.insert(wordIndex);
+        const std::uint32_t hash = HashOf(key);
+        auto it = std::lower_bound(postings_.begin(), postings_.end(), Posting{hash, 0});
+        for (; it != postings_.end() && it->hash == hash; ++it) candidateIndices.insert(it->word);
     };
 
     const std::string queryOwned(query);
