@@ -49,6 +49,8 @@ using winrt::Windows::Foundation::Numerics::float3;
 
 constexpr wchar_t kWindowClassName[] = L"TekitoCandidateWindow";
 constexpr wchar_t kShadowClassName[] = L"TekitoCandidateShadow";
+// The meaning beside the list, a window of its own.
+constexpr wchar_t kNoteClassName[] = L"TekitoCandidateNote";
 constexpr wchar_t kControlClassName[] = L"TekitoCandidateControl";
 constexpr wchar_t kNotifyClassName[] = L"TekitoCandidateNotify";
 
@@ -86,9 +88,11 @@ constexpr int kMaxWidth = 440;
 constexpr int kColumnMinWidth = 96;
 constexpr int kColumnMaxWidth = 220;
 constexpr int kColumnGap = 4;
-// The meaning beside the list: a fixed width, its text level with the
-// selected row (up to kDetailMaxHeight, dropping later senses to fit).
+// The meaning in a window of its own beside the list: as wide as its text
+// up to kDetailWidth, its headword level with the selected row (up to
+// kDetailMaxHeight, dropping later senses to fit), kNoteGap from the list.
 constexpr int kDetailWidth = 250;
+constexpr int kNoteGap = 8;
 constexpr int kDetailPadding = 14;
 constexpr int kDetailMaxHeight = 300;
 constexpr int kCaretGap = 6;
@@ -1103,17 +1107,9 @@ void DrawCaption(ID2D1RenderTarget* target, const TextFormats& formats, const La
                      muted.get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
 }
 
-void DrawDetail(ID2D1RenderTarget* target, const Layout& layout, const Style& style) {
+// The meaning, in its own window.
+void DrawNote(ID2D1RenderTarget* target, const Layout& layout, const Style& style) {
     if (!layout.detailText) return;
-    // A line between the list and its meaning, unless the list's scroll
-    // indicator already stands there.
-    if (!layout.indicator) {
-        auto line = SolidBrush(target, style.palette.tagFill);
-        const float x = std::round(layout.listWidth) + 0.5f;
-        target->DrawLine(D2D1::Point2F(x, layout.padding * 2.0f),
-                         D2D1::Point2F(x, static_cast<float>(layout.height) - layout.padding * 2.0f), line.get(),
-                         std::max(1.0f, layout.scale));
-    }
     auto text = SolidBrush(target, style.palette.text);
     target->DrawTextLayout(D2D1::Point2F(layout.detail.left, layout.detail.top), layout.detailText.get(),
                            text.get(), D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT | D2D1_DRAW_TEXT_OPTIONS_CLIP);
@@ -1256,6 +1252,18 @@ private:
     winrt::hstring name_;
 };
 
+// A shadow drawn into a click-through layered window under a panel.
+struct ShadowWindow {
+    HWND hwnd{nullptr};
+    HDC dc{nullptr};
+    HBITMAP bitmap{nullptr};
+    HGDIOBJ old{nullptr};
+    void* bits{nullptr};
+    SIZE size{0, 0};
+    std::array<float, 5> key{};
+    POINT position{};
+};
+
 class CandidateView final {
 public:
     explicit CandidateView(std::shared_ptr<CandidateWindow::Channel> channel)
@@ -1270,7 +1278,7 @@ public:
                             reinterpret_cast<IUnknown**>(dwrite_.put()));
         brandFont_ = LoadBrandFont(dwrite_.get(), channel_->instance);
         if (!RegisterWindowClass(kControlClassName) || !RegisterWindowClass(kWindowClassName) ||
-            !RegisterWindowClass(kShadowClassName)) {
+            !RegisterWindowClass(kShadowClassName) || !RegisterWindowClass(kNoteClassName)) {
             return false;
         }
         control_ = CreateWindowExW(0, kControlClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
@@ -1281,12 +1289,15 @@ public:
     [[nodiscard]] HWND Control() const noexcept { return control_; }
 
     void Shutdown() noexcept {
-        if (shadow_) DestroyWindow(shadow_);
+        DestroyNote();
+        if (shadow_.hwnd) DestroyWindow(shadow_.hwnd);
         if (panel_) DestroyWindow(panel_);
-        shadow_ = panel_ = nullptr;
+        shadow_.hwnd = panel_ = nullptr;
         ReleaseComposition();
-        ReleaseShadowBitmap();
+        ReleaseShadowBitmap(shadow_);
+        ReleaseShadowBitmap(noteShadow_);
         hwndTarget_ = nullptr;
+        noteHwndTarget_ = nullptr;
         formats_ = {};
         brandFont_.collection = nullptr;
         if (brandFont_.loader && dwrite_) {
@@ -1296,7 +1307,7 @@ public:
         }
         brandFont_.loader = nullptr;
         ShutdownDispatcherQueue();
-        for (const auto* name : {kShadowClassName, kWindowClassName, kControlClassName}) {
+        for (const auto* name : {kNoteClassName, kShadowClassName, kWindowClassName, kControlClassName}) {
             UnregisterClassW(name, channel_->instance);
         }
     }
@@ -1342,6 +1353,10 @@ private:
         case WM_PAINT:
             if (hwnd == self->panel_ && !self->composition_) {
                 self->PaintFallback();
+                return 0;
+            }
+            if (hwnd == self->notePanel_ && !self->composition_) {
+                self->PaintNoteFallback();
                 return 0;
             }
             break;
@@ -1437,27 +1452,47 @@ private:
         const Layout layout = ComputeLayout(frame);
         const POINT position = CandidatePosition(frame.caret, layout.width, layout.height,
                                                  ScaleForWindow(panel_, kCaretGap));
+        int noteOffset = 0;
+        Layout note = ComputeNote(frame, layout, noteOffset);
         const bool animate = style_.animations && visible_ && frame_.selectedRow < frame_.rows.size() &&
                              frame.selectedRow < frame.rows.size() &&
                              frame.firstIndex == frame_.firstIndex &&
                              frame.selectedRow != frame_.selectedRow;
         frame_ = std::move(frame);
         layout_ = layout;
+        note_ = std::move(note);
+        const bool withNote = note_.detailText && notePanel_;
+        const POINT notePosition = withNote ? NotePosition(frame_.caret, position, noteOffset) : POINT{};
 
         if (composition_) {
             HRESULT hr = RenderComposition(animate);
             if (IsDeviceLost(hr) && RecreateDevices()) hr = RenderComposition(false);
             winrt::check_hresult(hr);
-            UpdateShadow(position);
-            HDWP batch = BeginDeferWindowPos(2);
-            if (batch && shadow_) {
-                batch = DeferWindowPos(batch, shadow_, HWND_TOPMOST, 0, 0, 0, 0,
+            if (withNote) {
+                hr = RenderNote();
+                if (IsDeviceLost(hr) && RecreateDevices()) hr = RenderNote();
+                winrt::check_hresult(hr);
+                UpdateShadow(noteShadow_, note_, notePosition);
+            }
+            UpdateShadow(shadow_, layout_, position);
+            HDWP batch = BeginDeferWindowPos(4);
+            if (batch && shadow_.hwnd) {
+                batch = DeferWindowPos(batch, shadow_.hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
             }
             if (batch) {
                 // Directly below the (click-through) shadow window.
-                batch = DeferWindowPos(batch, panel_, shadow_ ? shadow_ : HWND_TOPMOST, position.x,
+                batch = DeferWindowPos(batch, panel_, shadow_.hwnd ? shadow_.hwnd : HWND_TOPMOST, position.x,
                                        position.y, layout.width, layout.height,
+                                       SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            }
+            if (batch && withNote && noteShadow_.hwnd) {
+                batch = DeferWindowPos(batch, noteShadow_.hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                                       SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            }
+            if (batch && withNote) {
+                batch = DeferWindowPos(batch, notePanel_, noteShadow_.hwnd ? noteShadow_.hwnd : HWND_TOPMOST,
+                                       notePosition.x, notePosition.y, note_.width, note_.height,
                                        SWP_NOACTIVATE | SWP_SHOWWINDOW);
             }
             if (batch) EndDeferWindowPos(batch);
@@ -1469,6 +1504,20 @@ private:
                                                 static_cast<UINT32>(layout.height)));
             }
             InvalidateRect(panel_, nullptr, FALSE);
+            if (withNote) {
+                SetWindowPos(notePanel_, HWND_TOPMOST, notePosition.x, notePosition.y, note_.width, note_.height,
+                             SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                if (noteHwndTarget_) {
+                    noteHwndTarget_->Resize(
+                        D2D1::SizeU(static_cast<UINT32>(note_.width), static_cast<UINT32>(note_.height)));
+                }
+                InvalidateRect(notePanel_, nullptr, FALSE);
+            }
+        }
+        if (withNote) {
+            noteShown_ = true;
+        } else {
+            HideNote();
         }
         visible_ = true;
         if (frame_.badge) SetTimer(panel_, kBadgeTimer, kBadgeHoldMs, nullptr);
@@ -1516,11 +1565,11 @@ private:
             if (root_) root_.Opacity(opacity);
         } catch (...) {
         }
-        if (shadow_ && shadowDc_) {
+        if (shadow_.hwnd && shadow_.dc) {
             POINT source{0, 0};
-            SIZE size = shadowSize_;
+            SIZE size = shadow_.size;
             BLENDFUNCTION blend{AC_SRC_OVER, 0, static_cast<BYTE>(std::lround(255.0f * opacity)), AC_SRC_ALPHA};
-            UpdateLayeredWindow(shadow_, nullptr, &shadowPosition_, &size, shadowDc_, &source, 0, &blend,
+            UpdateLayeredWindow(shadow_.hwnd, nullptr, &shadow_.position, &size, shadow_.dc, &source, 0, &blend,
                                 ULW_ALPHA);
         }
     }
@@ -1536,7 +1585,8 @@ private:
             if (root_) root_.Opacity(0.0f);
         } catch (...) {
         }
-        if (shadow_) ShowWindow(shadow_, SW_HIDE);
+        HideNote();
+        if (shadow_.hwnd) ShowWindow(shadow_.hwnd, SW_HIDE);
         if (panel_) ShowWindow(panel_, SW_HIDE);
     }
 
@@ -1624,13 +1674,18 @@ private:
         l.rowRight = static_cast<float>(l.width) - l.padding - static_cast<float>(gutter);
         l.listWidth = static_cast<float>(l.width);
         l.listHeight = static_cast<float>(l.height);
-        AddDetail(l, frame);
         return l;
     }
 
-    // Widens the layout by the meaning pane when the frame has a meaning.
-    void AddDetail(Layout& l, const Frame& frame) const {
-        if (frame.detailSenses.empty() || !formats_.detail || !dwrite_) return;
+    // The meaning's window: as wide as its text (up to kDetailWidth), and
+    // `offset` down from the list's top so its headword sits on the
+    // selected row's baseline. No text when the frame has no meaning.
+    Layout ComputeNote(const Frame& frame, const Layout& list, int& offset) const {
+        Layout l;
+        l.scale = list.scale;
+        l.padding = list.padding;
+        offset = 0;
+        if (frame.detailSenses.empty() || frame.badge || !formats_.detail || !dwrite_) return l;
         const float pad = static_cast<float>(ScaleForWindow(panel_, kDetailPadding));
         const float inner = static_cast<float>(ScaleForWindow(panel_, kDetailWidth)) - 2.0f * pad;
         const float maxText = static_cast<float>(ScaleForWindow(panel_, kDetailMaxHeight)) - 2.0f * pad;
@@ -1653,24 +1708,26 @@ private:
             text = nullptr;
             if (FAILED(dwrite_->CreateTextLayout(content.c_str(), static_cast<UINT32>(content.size()),
                                                  formats_.detail.get(), inner, maxText, text.put()))) {
-                return;
+                return l;
             }
             const DWRITE_TEXT_RANGE head{0, static_cast<UINT32>(frame.detailHead.size())};
             text->SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, head);
-            text->SetFontSize(kFontDetailHead * l.scale, head);
+            text->SetFontSize(kFontDetailHead * list.scale, head);
             DWRITE_TEXT_METRICS metrics{};
             text->GetMetrics(&metrics);
             textHeight = metrics.height;
             if (textHeight <= maxText) break;
         }
-        if (!text) return;
-        const int width = ScaleForWindow(panel_, kDetailWidth);
-        l.width += width;
+        if (!text) return l;
+        DWRITE_TEXT_METRICS metrics{};
+        text->GetMetrics(&metrics);
         const float shown = std::min(textHeight, maxText);
-        l.height = std::max(l.height, static_cast<int>(std::ceil(shown + 2.0f * pad)));
-        // The headword on the selected row's baseline, as far down as the
-        // panel lets it.
-        float top = pad;
+        l.width = static_cast<int>(std::ceil(std::min(metrics.width, inner) + 2.0f * pad));
+        l.height = static_cast<int>(std::ceil(shown + 2.0f * pad));
+        l.radius = std::min(list.radius, static_cast<float>(l.height) / 2.0f);
+        l.listWidth = static_cast<float>(l.width);
+        l.listHeight = static_cast<float>(l.height);
+        // The headword on the selected row's baseline.
         if (frame.selectedRow < frame.rows.size()) {
             // The first line's metrics (asking for all, as one is too few
             // for text that wraps).
@@ -1686,13 +1743,29 @@ private:
             dwrite_->CreateTextLayout(L"\x3042", 1, formats_.text.get(), 1000.0f, 1000.0f, sample.put());
             const auto rowLine = lineOf(sample.get());
             const auto headLine = lineOf(text.get());
-            const D2D1_RECT_F row = l.RowRect(frame.selectedRow);
-            const float baseline = row.top + (l.rowHeight - rowLine.height) / 2.0f + rowLine.baseline;
-            top = std::round(baseline - headLine.baseline);
-            top = std::clamp(top, pad, static_cast<float>(l.height) - pad - shown);
+            const D2D1_RECT_F row = list.RowRect(frame.selectedRow);
+            const float baseline = row.top + (list.rowHeight - rowLine.height) / 2.0f + rowLine.baseline;
+            offset = static_cast<int>(std::lround(baseline - pad - headLine.baseline));
         }
-        l.detail = D2D1::RectF(l.listWidth + pad, top, static_cast<float>(l.width) - pad, top + shown);
+        // Its text set out to the width it takes.
+        text->SetMaxWidth(static_cast<float>(l.width) - 2.0f * pad);
+        l.detail = D2D1::RectF(pad, pad, static_cast<float>(l.width) - pad, pad + shown);
         l.detailText = std::move(text);
+        return l;
+    }
+
+    // Beside the list (right, or left where the screen ends), level with
+    // the selected row, within the work area.
+    POINT NotePosition(const RECT& caret, POINT list, int offset) const {
+        const RECT work = WorkAreaNear(caret);
+        const int gap = ScaleForWindow(panel_, kNoteGap);
+        int x = list.x + layout_.width + gap;
+        if (x + note_.width > work.right) x = list.x - gap - note_.width;
+        x = std::max<int>(x, work.left);
+        int y = list.y + offset;
+        y = std::min<int>(y, work.bottom - note_.height);
+        y = std::max<int>(y, work.top);
+        return {x, y};
     }
 
     void EnsureTextFormats() {
@@ -1766,11 +1839,8 @@ private:
                 DwmSetWindowAttribute(panel_, DWMWA_BORDER_COLOR, &noBorder, sizeof(noBorder));
                 composition_ = BuildVisualTree();
                 if (composition_) {
-                    shadow_ = CreateWindowExW(
-                        WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW |
-                            WS_EX_TOPMOST,
-                        kShadowClassName, L"", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr,
-                        channel_->instance, this);
+                    shadow_.hwnd = CreateShadowWindow();
+                    CreateNote();
                     return true;
                 }
                 DestroyWindow(panel_);
@@ -1791,19 +1861,75 @@ private:
         // Extending the frame gives the popup a DWM shadow.
         const MARGINS margins{-1, -1, -1, -1};
         DwmExtendFrameIntoClientArea(panel_, &margins);
+        CreateNote();
         return true;
     }
 
-    HWND CreatePanel(DWORD extraStyle) {
+    HWND CreatePanel(DWORD extraStyle, const wchar_t* className = kWindowClassName) {
         return CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST | extraStyle,
-                               kWindowClassName, L"", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr,
+                               className, L"", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr,
                                channel_->instance, this);
     }
 
+    HWND CreateShadowWindow() {
+        return CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW |
+                                   WS_EX_TOPMOST,
+                               kShadowClassName, L"", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr,
+                               channel_->instance, this);
+    }
+
+    // The meaning's window, in the list's kind: glass with its own shadow,
+    // or a plain one with the system's shadow. None when it cannot be made
+    // (the list shows without its meaning).
+    void CreateNote() {
+        if (composition_) {
+            notePanel_ = CreatePanel(WS_EX_NOREDIRECTIONBITMAP, kNoteClassName);
+            if (!notePanel_) return;
+            BOOL enable = TRUE;
+            DwmSetWindowAttribute(notePanel_, DWMWA_USE_HOSTBACKDROPBRUSH, &enable, sizeof(enable));
+            const DWM_WINDOW_CORNER_PREFERENCE corners = DWMWCP_DONOTROUND;
+            DwmSetWindowAttribute(notePanel_, DWMWA_WINDOW_CORNER_PREFERENCE, &corners, sizeof(corners));
+            const COLORREF noBorder = DWMWA_COLOR_NONE;
+            DwmSetWindowAttribute(notePanel_, DWMWA_BORDER_COLOR, &noBorder, sizeof(noBorder));
+            if (!BuildNoteTree()) {
+                DestroyWindow(notePanel_);
+                notePanel_ = nullptr;
+                return;
+            }
+            noteShadow_.hwnd = CreateShadowWindow();
+            return;
+        }
+        notePanel_ = CreatePanel(0, kNoteClassName);
+        if (!notePanel_) return;
+        const DWM_WINDOW_CORNER_PREFERENCE corners = DWMWCP_ROUND;
+        DwmSetWindowAttribute(notePanel_, DWMWA_WINDOW_CORNER_PREFERENCE, &corners, sizeof(corners));
+        const MARGINS margins{-1, -1, -1, -1};
+        DwmExtendFrameIntoClientArea(notePanel_, &margins);
+    }
+
+    void DestroyNote() noexcept {
+        if (noteShadow_.hwnd) DestroyWindow(noteShadow_.hwnd);
+        if (notePanel_) DestroyWindow(notePanel_);
+        noteShadow_.hwnd = notePanel_ = nullptr;
+        noteShown_ = false;
+    }
+
+    void HideNote() noexcept {
+        if (!noteShown_) return;
+        noteShown_ = false;
+        try {
+            if (noteRoot_) noteRoot_.Opacity(0.0f);
+        } catch (...) {
+        }
+        if (noteShadow_.hwnd) ShowWindow(noteShadow_.hwnd, SW_HIDE);
+        if (notePanel_) ShowWindow(notePanel_, SW_HIDE);
+    }
+
     void SwitchToFallback() noexcept {
-        if (shadow_) DestroyWindow(shadow_);
+        DestroyNote();
+        if (shadow_.hwnd) DestroyWindow(shadow_.hwnd);
         if (panel_) DestroyWindow(panel_);
-        shadow_ = panel_ = nullptr;
+        shadow_.hwnd = panel_ = nullptr;
         visible_ = false;
         ReleaseComposition();
         compositionBroken_ = true;
@@ -1958,6 +2084,46 @@ private:
         }
     }
 
+    // The note: glass, its chrome, and the meaning's text.
+    bool BuildNoteTree() {
+        try {
+            winrt::check_hresult(
+                compositor_.as<abi::Desktop::ICompositorDesktopInterop>()->CreateDesktopWindowTarget(
+                    notePanel_, TRUE,
+                    reinterpret_cast<abi::Desktop::IDesktopWindowTarget**>(winrt::put_abi(noteTarget_))));
+            noteRoot_ = compositor_.CreateContainerVisual();
+            noteTarget_.Root(noteRoot_);
+            noteGlass_ = compositor_.CreateSpriteVisual();
+            noteGlassClip_ = compositor_.CreateRectangleClip();
+            noteGlass_.Clip(noteGlassClip_);
+            noteSolid_ = compositor_.CreateColorBrush();
+            if (hostBackdrop_) noteBackdrop_ = VibrantBackdrop();
+            noteChromeVisual_ = SurfaceVisual(noteChrome_);
+            noteContentVisual_ = SurfaceVisual(noteContent_);
+            noteRoot_.Children().InsertAtTop(noteGlass_);
+            noteRoot_.Children().InsertAtTop(noteChromeVisual_);
+            noteRoot_.Children().InsertAtTop(noteContentVisual_);
+            noteRoot_.Opacity(0.0f);
+            return true;
+        } catch (...) {
+            ReleaseNoteComposition();
+            return false;
+        }
+    }
+
+    void ReleaseNoteComposition() noexcept {
+        noteContentVisual_ = nullptr;
+        noteChromeVisual_ = nullptr;
+        noteBackdrop_ = nullptr;
+        noteSolid_ = nullptr;
+        noteGlassClip_ = nullptr;
+        noteGlass_ = nullptr;
+        noteRoot_ = nullptr;
+        noteTarget_ = nullptr;
+        noteChrome_ = {};
+        noteContent_ = {};
+    }
+
     // The blurred desktop behind the window, with its color boosted. Falls
     // back to the plain backdrop if the effect cannot be compiled.
     wuc::CompositionBrush VibrantBackdrop() {
@@ -1974,6 +2140,7 @@ private:
     }
 
     void ReleaseComposition() noexcept {
+        ReleaseNoteComposition();
         selectionAnimations_ = nullptr;
         lightVisual_ = nullptr;
         lightAnchor_ = nullptr;
@@ -2089,7 +2256,6 @@ private:
             DrawCaption(dc, formats_, layout_, frame_, style_);
             DrawRows(dc, dwrite_.get(), formats_, layout_, frame_, style_, Ink::Normal, kNoRow, kNoRow);
             DrawIndicator(dc, layout_, frame_, style_);
-            DrawDetail(dc, layout_, style_);
         });
         if (FAILED(hr)) return hr;
 
@@ -2154,35 +2320,92 @@ private:
         return S_OK;
     }
 
-    // --- shadow window -------------------------------------------------------
-
-    void ReleaseShadowBitmap() noexcept {
-        if (shadowDc_) {
-            if (shadowOldBitmap_) SelectObject(shadowDc_, shadowOldBitmap_);
-            DeleteDC(shadowDc_);
+    HRESULT RenderNote() {
+        const float width = static_cast<float>(note_.width);
+        const float height = static_cast<float>(note_.height);
+        const float2 radius{note_.radius, note_.radius};
+        noteRoot_.Opacity(1.0f);
+        noteGlass_.Size({width, height});
+        noteGlassClip_.Right(width);
+        noteGlassClip_.Bottom(height);
+        noteGlassClip_.TopLeftRadius(radius);
+        noteGlassClip_.TopRightRadius(radius);
+        noteGlassClip_.BottomRightRadius(radius);
+        noteGlassClip_.BottomLeftRadius(radius);
+        noteSolid_.Color(ToUiColor(style_.palette.solid));
+        if (style_.glass && noteBackdrop_) {
+            noteGlass_.Brush(noteBackdrop_);
+        } else {
+            noteGlass_.Brush(noteSolid_);
         }
-        if (shadowBitmap_) DeleteObject(shadowBitmap_);
-        shadowDc_ = nullptr;
-        shadowBitmap_ = nullptr;
-        shadowOldBitmap_ = nullptr;
-        shadowBits_ = nullptr;
-        shadowSize_ = {0, 0};
-        shadowKey_ = {};
+        noteChromeVisual_.Size({width, height});
+        HRESULT hr = PaintSurface(noteChrome_, note_.width, note_.height,
+                                  [&](ID2D1RenderTarget* dc) { DrawChrome(dc, note_, style_); });
+        if (FAILED(hr)) return hr;
+        noteContentVisual_.Size({width, height});
+        return PaintSurface(noteContent_, note_.width, note_.height,
+                            [&](ID2D1RenderTarget* dc) { DrawNote(dc, note_, style_); });
     }
 
-    void UpdateShadow(POINT panelPosition) {
-        if (!shadow_) return;
+    void PaintNoteFallback() {
+        PAINTSTRUCT ps{};
+        if (!BeginPaint(notePanel_, &ps)) return;
+        if (!d2dFactory_) {
+            D2D1CreateFactory(D2D1_FACTORY_TYPE_MULTI_THREADED, __uuidof(ID2D1Factory1), nullptr, d2dFactory_.put_void());
+        }
+        if (!noteHwndTarget_ && note_.width > 0 && d2dFactory_) {
+            const auto properties = D2D1::RenderTargetProperties(
+                D2D1_RENDER_TARGET_TYPE_DEFAULT,
+                D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.0f, 96.0f);
+            d2dFactory_->CreateHwndRenderTarget(
+                properties,
+                D2D1::HwndRenderTargetProperties(
+                    notePanel_, D2D1::SizeU(static_cast<UINT32>(note_.width), static_cast<UINT32>(note_.height))),
+                noteHwndTarget_.put());
+        }
+        if (noteHwndTarget_ && noteShown_) {
+            ID2D1RenderTarget* target = noteHwndTarget_.get();
+            target->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+            target->BeginDraw();
+            target->Clear(style_.palette.solid);
+            if (SolidBrush(target, style_.palette.text)) {
+                DrawChrome(target, note_, style_);
+                DrawNote(target, note_, style_);
+            }
+            if (target->EndDraw() == D2DERR_RECREATE_TARGET) noteHwndTarget_ = nullptr;
+        }
+        EndPaint(notePanel_, &ps);
+    }
+
+    // --- shadow window -------------------------------------------------------
+
+    static void ReleaseShadowBitmap(ShadowWindow& shadow) noexcept {
+        if (shadow.dc) {
+            if (shadow.old) SelectObject(shadow.dc, shadow.old);
+            DeleteDC(shadow.dc);
+        }
+        if (shadow.bitmap) DeleteObject(shadow.bitmap);
+        shadow.dc = nullptr;
+        shadow.bitmap = nullptr;
+        shadow.old = nullptr;
+        shadow.bits = nullptr;
+        shadow.size = {0, 0};
+        shadow.key = {};
+    }
+
+    void UpdateShadow(ShadowWindow& shadow, const Layout& layout, POINT panelPosition) {
+        if (!shadow.hwnd) return;
         const int marginX = ScaleForWindow(panel_, kShadowMarginX);
         const int marginTop = ScaleForWindow(panel_, kShadowMarginTop);
         const int marginBottom = ScaleForWindow(panel_, kShadowMarginBottom);
-        const SIZE size{layout_.width + 2 * marginX, layout_.height + marginTop + marginBottom};
-        const std::array<float, 5> key{static_cast<float>(layout_.width),
-                                       static_cast<float>(layout_.height), layout_.radius,
+        const SIZE size{layout.width + 2 * marginX, layout.height + marginTop + marginBottom};
+        const std::array<float, 5> key{static_cast<float>(layout.width),
+                                       static_cast<float>(layout.height), layout.radius,
                                        style_.palette.shadowKey, style_.palette.shadowAmbient};
 
-        if (key != shadowKey_ || !shadowBits_) {
-            if (size.cx != shadowSize_.cx || size.cy != shadowSize_.cy || !shadowBits_) {
-                ReleaseShadowBitmap();
+        if (key != shadow.key || !shadow.bits) {
+            if (size.cx != shadow.size.cx || size.cy != shadow.size.cy || !shadow.bits) {
+                ReleaseShadowBitmap(shadow);
                 BITMAPINFO info{};
                 info.bmiHeader.biSize = sizeof(info.bmiHeader);
                 info.bmiHeader.biWidth = size.cx;
@@ -2190,31 +2413,31 @@ private:
                 info.bmiHeader.biPlanes = 1;
                 info.bmiHeader.biBitCount = 32;
                 info.bmiHeader.biCompression = BI_RGB;
-                shadowDc_ = CreateCompatibleDC(nullptr);
-                shadowBitmap_ = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &shadowBits_, nullptr, 0);
-                if (!shadowDc_ || !shadowBitmap_ || !shadowBits_) {
-                    ReleaseShadowBitmap();
+                shadow.dc = CreateCompatibleDC(nullptr);
+                shadow.bitmap = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &shadow.bits, nullptr, 0);
+                if (!shadow.dc || !shadow.bitmap || !shadow.bits) {
+                    ReleaseShadowBitmap(shadow);
                     return;
                 }
-                shadowOldBitmap_ = SelectObject(shadowDc_, shadowBitmap_);
-                shadowSize_ = size;
+                shadow.old = SelectObject(shadow.dc, shadow.bitmap);
+                shadow.size = size;
             }
-            const float s = layout_.scale;
-            RasterizeShadow(static_cast<std::uint32_t*>(shadowBits_), size.cx, size.cy,
+            const float s = layout.scale;
+            RasterizeShadow(static_cast<std::uint32_t*>(shadow.bits), size.cx, size.cy,
                             static_cast<float>(marginX), static_cast<float>(marginTop),
-                            static_cast<float>(layout_.width), static_cast<float>(layout_.height),
-                            layout_.radius,
+                            static_cast<float>(layout.width), static_cast<float>(layout.height),
+                            layout.radius,
                             {kShadowKeyBlur * s, kShadowKeyOffset * s, style_.palette.shadowKey},
                             {kShadowAmbientBlur * s, kShadowAmbientOffset * s, style_.palette.shadowAmbient});
-            shadowKey_ = key;
+            shadow.key = key;
         }
 
         POINT destination{panelPosition.x - marginX, panelPosition.y - marginTop};
-        shadowPosition_ = destination;
-        SIZE windowSize = shadowSize_;
+        shadow.position = destination;
+        SIZE windowSize = shadow.size;
         POINT source{0, 0};
         BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-        UpdateLayeredWindow(shadow_, nullptr, &destination, &windowSize, shadowDc_, &source, 0, &blend,
+        UpdateLayeredWindow(shadow.hwnd, nullptr, &destination, &windowSize, shadow.dc, &source, 0, &blend,
                             ULW_ALPHA);
     }
 
@@ -2269,7 +2492,6 @@ private:
                          kNoRow);
             }
             DrawIndicator(target, layout_, frame_, style_);
-            DrawDetail(target, layout_, style_);
             if (frame_.badge) DrawBadge(target, layout_, frame_.badge, channel_->instance);
             if (target->EndDraw() == D2DERR_RECREATE_TARGET) hwndTarget_ = nullptr;
         }
@@ -2279,17 +2501,30 @@ private:
     std::shared_ptr<CandidateWindow::Channel> channel_;
     HWND control_{nullptr};
     HWND panel_{nullptr};
-    HWND shadow_{nullptr};
     bool composition_{false};
     bool compositionBroken_{false};
     bool windowsFailed_{false};
     bool hostBackdrop_{false};
     bool visible_{false};
     int badgeFade_{0};
-    POINT shadowPosition_{};
 
     Frame frame_;
     Layout layout_;
+    // The meaning's window and its layout (no text: hidden).
+    HWND notePanel_{nullptr};
+    bool noteShown_{false};
+    Layout note_;
+    wuc::Desktop::DesktopWindowTarget noteTarget_{nullptr};
+    wuc::ContainerVisual noteRoot_{nullptr};
+    wuc::SpriteVisual noteGlass_{nullptr};
+    wuc::RectangleClip noteGlassClip_{nullptr};
+    wuc::CompositionColorBrush noteSolid_{nullptr};
+    wuc::CompositionBrush noteBackdrop_{nullptr};
+    wuc::SpriteVisual noteChromeVisual_{nullptr};
+    wuc::SpriteVisual noteContentVisual_{nullptr};
+    Surface noteChrome_;
+    Surface noteContent_;
+    winrt::com_ptr<ID2D1HwndRenderTarget> noteHwndTarget_;
     Style style_;
     TextFormats formats_;
     winrt::com_ptr<IDWriteFactory> dwrite_;
@@ -2323,12 +2558,9 @@ private:
     Surface capsule_;
     Surface selectedText_;
 
-    HDC shadowDc_{nullptr};
-    HBITMAP shadowBitmap_{nullptr};
-    HGDIOBJ shadowOldBitmap_{nullptr};
-    void* shadowBits_{nullptr};
-    SIZE shadowSize_{0, 0};
-    std::array<float, 5> shadowKey_{};
+    // The list's shadow and the meaning's.
+    ShadowWindow shadow_;
+    ShadowWindow noteShadow_;
 
     winrt::com_ptr<ID2D1HwndRenderTarget> hwndTarget_;
 };

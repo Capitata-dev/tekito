@@ -941,8 +941,7 @@ void TextService::ShowJapaneseCandidates(ITfContext* context, TfEditCookie editC
         rows.push_back(std::move(row));
     }
     const auto& selected = list.selected;
-    // The columns after the first page show no meaning beside them.
-    const CandidateDetail detail = selected && *selected < list.rows.size() && list.columnRows == 0
+    const CandidateDetail detail = selected && *selected < list.rows.size()
                                        ? MeaningFor(list.rows[*selected].text, list.rows[*selected].reading)
                                        : CandidateDetail{};
     // Predictions follow the caret; candidates go under their phrase.

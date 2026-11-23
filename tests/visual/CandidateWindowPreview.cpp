@@ -368,18 +368,19 @@ tekito::tsf::CandidateDetail SampleDetail(bool kanji, bool japanese) {
 
 // This process's candidate window: TEKITO installed on the PC has hidden
 // ones of the same class in other applications.
-HWND OwnCandidateWindow() {
+HWND OwnCandidateWindow(const wchar_t* className = L"TekitoCandidateWindow") {
     struct Search {
         DWORD process;
         HWND found;
-    } search{GetCurrentProcessId(), nullptr};
+        const wchar_t* className;
+    } search{GetCurrentProcessId(), nullptr, className};
     EnumWindows(
         [](HWND hwnd, LPARAM lParam) -> BOOL {
             auto& s = *reinterpret_cast<Search*>(lParam);
             wchar_t name[64]{};
             DWORD process = 0;
             GetWindowThreadProcessId(hwnd, &process);
-            if (process != s.process || !GetClassNameW(hwnd, name, 64) || wcscmp(name, L"TekitoCandidateWindow") != 0) {
+            if (process != s.process || !GetClassNameW(hwnd, name, 64) || wcscmp(name, s.className) != 0) {
                 return TRUE;
             }
             s.found = hwnd;
@@ -548,6 +549,12 @@ int wmain(int argc, wchar_t** argv) {
     }
     RECT rect{};
     GetWindowRect(target, &rect);
+    // The meaning's window beside the list, when it shows.
+    if (const HWND note = OwnCandidateWindow(L"TekitoCandidateNote"); note && IsWindowVisible(note)) {
+        RECT noteRect{};
+        GetWindowRect(note, &noteRect);
+        UnionRect(&rect, &rect, &noteRect);
+    }
     InflateRect(&rect, kCaptureMargin, kCaptureMargin);
     if (!SaveScreenRectToBmp(rect, outputPath)) {
         fwprintf(stderr, L"Screenshot failed\n");
