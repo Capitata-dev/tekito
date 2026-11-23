@@ -21,7 +21,6 @@ function otherEntries(t, japaneseInstalled) {
     ...(japaneseInstalled ? [["report", "about", "feedback", a.report.title]] : []), ["bug", "about", "bug_report", a.bug.title],
     ["feature", "about", "lightbulb", a.feature.title], ["releases", "about", "history", a.releases.title],
     ["diagnostics", "about", "content_copy", a.diagnostics], ["license", "about", "gavel", a.license],
-    ["samples", "samples", "play_circle", t.pages.samples],
   ].map(([id, page, icon, title, details]) => ({ id, page, icon, title, details, other: true }));
 }
 
@@ -103,7 +102,6 @@ export function HomePage({ ctx }) {
       </div>
 
       <nav className="home-links" aria-label={t.settings}>
-        <Button variant="quiet" icon="play_circle" onClick={() => ctx.open("samples")}>{t.pages.samples}</Button>
         <Button variant="quiet" icon="checklist" onClick={() => ctx.open("all")}>{t.pages.all}</Button>
       </nav>
     </div>

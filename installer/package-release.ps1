@@ -166,13 +166,13 @@ foreach ($entry in @($binaries.GetEnumerator()) + @($documents.GetEnumerator()) 
 }
 # The bundle the built page references (not stale builds left in dist), and
 # every static file the page loads by name: icons, the font, the candidate
-# looks, the notices and the typing samples.
+# looks and the notices.
 $settingsSource = Join-Path $releaseRoot "settings-ui"
 $settingsIndex = Get-Content -LiteralPath (Join-Path $settingsSource "index.html") -Raw
 $settingsStatic = @(Get-ChildItem -LiteralPath $settingsSource -Recurse -File |
     ForEach-Object { Get-RelativeUnixPath $settingsSource $_.FullName } |
     Where-Object { $_ -ne "index.html" -and $_ -notmatch '^assets/[^/]+-[A-Za-z0-9_-]{8}\.(js|css)$' })
-foreach ($required in "notices/THIRD_PARTY_NOTICES.md", "samples/japanese-convert-light.mp4", "assets/candidates/glass-light.png") {
+foreach ($required in "notices/THIRD_PARTY_NOTICES.md", "assets/candidates/glass-light.png") {
     if ($settingsStatic -notcontains $required) { throw "Settings page file is missing: $required" }
 }
 $settingsFiles = @("index.html") + @([regex]::Matches($settingsIndex, "assets/[^`"']+") | ForEach-Object { $_.Value }) +

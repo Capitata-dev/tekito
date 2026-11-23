@@ -8,7 +8,7 @@ import { CapitataLogo } from "./CapitataLogo.jsx";
 import { hostRequest, onHostStateChanged } from "./host.js";
 import { messages, resolveLanguage, TextContext, useText } from "./i18n.js";
 import {
-  Button, Card, Details, Dialog, Heading, IconButton, Keycaps, LinkRow, ModeIcon, Radios, Row, Segmented, Symbol, TextBox, Toggle, Wordmark, TekitoSymbol,
+  Button, Card, Details, Dialog, Heading, IconButton, LinkRow, Radios, Row, Segmented, Symbol, TextBox, Toggle, Wordmark, TekitoSymbol,
   LineWordmark,
 } from "./ui.jsx";
 import { brandVariables, hueColor, tekitoTheme } from "./theme.js";
@@ -22,7 +22,7 @@ import "./styles.css";
 const pageIds = [...navPages, ...footPages];
 // Pages opened from elsewhere (the list, or the setup's --page) that are
 // not in the list.
-const subPages = ["samples", "romaji"];
+const subPages = ["romaji"];
 // Links from before the pages were rearranged.
 const pageAliases = {
   japanese: "conversion", mixed: "conversion", ai: "conversion", auto: "slips", switching: "general", english: "slips",
@@ -449,7 +449,6 @@ function App() {
                 {current === "all" && <AllSettingsPage ctx={ctx} defaults={initialSettings} />}
                 {current === "dictionary" && <DictionaryPage {...pageProps} japanese={japaneseInstalled} learning={learning} encryption={encryption}
                   dictionary={dictionary} japaneseWords={japaneseWords} setModal={setModal} />}
-                {current === "samples" && <SamplesPage japaneseInstalled={japaneseInstalled} back={() => open("home")} />}
                 {current === "romaji" && <RomajiTable romaji={romaji} runAction={runAction} setConfirm={setConfirm} back={() => open("keys")} />}
                 {current === "about" && <AboutPage {...pageProps} version={version} runtime={runtime} packs={packs} japanese={japaneseInstalled} />}
               </>
@@ -508,63 +507,6 @@ for (const name of ["dragover", "drop"]) window.addEventListener(name, (event) =
 
 // ---------------------------------------------------------------------------
 // 日本語
-
-// 入力の見本: short clips of what each mode does (public/samples, recorded
-// by tests/visual/samples/encode.py), one playing at a time.
-const sampleSets = {
-  japanese: [
-    ["japanese-convert", ["Space", "Enter"]], ["japanese-convert-long", ["Space"]], ["japanese-live", []],
-    ["japanese-phrases", ["Space", "↑"]], ["japanese-prediction", ["Tab"]], ["japanese-english", ["Shift"]],
-    ["japanese-forms", ["F6", "F7", "F8", "F10"]], ["japanese-special", ["Space"]], ["japanese-undo", ["Ctrl", "Backspace"]],
-    ["japanese-slips", ["Space"]],
-  ],
-  mixed: [["mixed-basic", ["Space"]], ["mixed-long", ["Space"]], ["mixed-live", []], ["mixed-vowel", ["Space"]], ["mixed-correction", ["Space"]]],
-  auto: [
-    ["auto-correct", ["Space"]], ["auto-undo", ["Backspace", "Esc"]], ["auto-completion", ["Tab"]], ["auto-next", ["Tab"]],
-    ["auto-casual", []], ["auto-period", ["Enter"]],
-  ],
-};
-
-function SamplesPage({ japaneseInstalled, back }) {
-  const t = useText();
-  const modes = japaneseInstalled ? ["japanese", "mixed", "auto"] : ["auto"];
-  const [mode, setMode] = useState(modes[0]);
-  const [shown, setShown] = useState(null);
-  const theme = window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  const clip = (id) => `./samples/${id}-${theme}.mp4`;
-  return (
-    <>
-      <Button icon="chevron_left" variant="quiet" className="back" onClick={back}>{t.pages.home}</Button>
-      <div className="sample-tabs" role="tablist" aria-label={t.pages.samples}>
-        {modes.map((id) => (
-          <button key={id} type="button" role="tab" aria-selected={mode === id} className="sample-tab" onClick={() => setMode(id)}>
-            <ModeIcon id={id} size={18} />{t.modeNames[id]}
-          </button>
-        ))}
-      </div>
-      <div className="samples" role="tabpanel">
-        {sampleSets[mode].map(([id, keys]) => (
-          <button key={id} type="button" className="sample" onClick={() => setShown([id, keys])}>
-            <span className="sample-stage">
-              {/* The clip's last frame; the clip plays once opened. */}
-              <img src={clip(id).replace(".mp4", ".jpg")} alt="" />
-              <span className="sample-play" aria-hidden="true"><Symbol name="play_arrow" size={22} /></span>
-            </span>
-            <span className="sample-name"><span>{t.samples.names[id]}</span><Keycaps keys={keys} /></span>
-          </button>
-        ))}
-      </div>
-      <Dialog open={Boolean(shown)} title={shown ? t.samples.names[shown[0]] : ""} wide onClose={() => setShown(null)}>
-        {shown && (
-          <div className="sample-player">
-            <video key={shown[0]} src={clip(shown[0])} muted loop playsInline autoPlay />
-          </div>
-        )}
-        <div className="dialog-actions"><Button variant="primary" onClick={() => setShown(null)}>{t.close}</Button></div>
-      </Dialog>
-    </>
-  );
-}
 
 function RomajiTable({ romaji, runAction, setConfirm, back }) {
   const t = useText();

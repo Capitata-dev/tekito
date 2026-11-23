@@ -203,8 +203,10 @@ target_link_libraries(TEKITO PRIVATE
     user32 gdi32 comctl32 comdlg32 shell32 advapi32 urlmon dxgi d2d1 dwrite ole32
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/lib/x64/WebView2LoaderStatic.lib"
 )
-# The page itself is built by `npm run build` in apps/tekito-settings/ui.
+# The page itself is built by `npm run build` in apps/tekito-settings/ui;
+# the copy beside TEKITO.exe is made afresh, with no file left from before.
 add_custom_command(TARGET TEKITO POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:TEKITO>/settings-ui"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/apps/tekito-settings/ui/dist"
         "$<TARGET_FILE_DIR:TEKITO>/settings-ui"
@@ -262,7 +264,7 @@ endif()
 # Setup program. The package-release script appends the package to it.
 
 set(TEKITO_SETUP_LIBS
-    delayimp user32 ole32 oleaut32 shell32 shlwapi advapi32 bcrypt userenv gdi32 d2d1 dwrite dwmapi windowscodecs mfplay
+    delayimp user32 ole32 oleaut32 shell32 shlwapi advapi32 bcrypt userenv gdi32 d2d1 dwrite dwmapi windowscodecs
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/lib/x64/WebView2LoaderStatic.lib"
 )
 
@@ -273,7 +275,7 @@ target_compile_options(TekitoSetupStub PRIVATE /utf-8)
 target_link_libraries(TekitoSetupStub PRIVATE ${TEKITO_SETUP_LIBS})
 # DLLs beside setup (Downloads) are never loaded: System32 only, and the
 # ones not always loaded by Windows wait until setup has said so.
-set_target_properties(TekitoSetupStub PROPERTIES LINK_FLAGS "/MANIFEST:NO /DEPENDENTLOADFLAG:0x800 /DELAYLOAD:d2d1.dll /DELAYLOAD:dwrite.dll /DELAYLOAD:dwmapi.dll /DELAYLOAD:mfplay.dll /DELAYLOAD:bcrypt.dll /DELAYLOAD:userenv.dll /DELAYLOAD:shlwapi.dll")
+set_target_properties(TekitoSetupStub PROPERTIES LINK_FLAGS "/MANIFEST:NO /DEPENDENTLOADFLAG:0x800 /DELAYLOAD:d2d1.dll /DELAYLOAD:dwrite.dll /DELAYLOAD:dwmapi.dll /DELAYLOAD:bcrypt.dll /DELAYLOAD:userenv.dll /DELAYLOAD:shlwapi.dll")
 
 # ---------------------------------------------------------------------------
 # Tests and tools
@@ -367,7 +369,7 @@ if(TEKITO_BUILD_TESTS)
     target_link_libraries(tekito_setup_preview PRIVATE ${TEKITO_SETUP_LIBS})
     # DLLs beside setup (Downloads) are never loaded: System32 only, and the
     # ones not always loaded by Windows wait until setup has said so.
-    set_target_properties(tekito_setup_preview PROPERTIES LINK_FLAGS "/MANIFEST:NO /DEPENDENTLOADFLAG:0x800 /DELAYLOAD:d2d1.dll /DELAYLOAD:dwrite.dll /DELAYLOAD:dwmapi.dll /DELAYLOAD:mfplay.dll /DELAYLOAD:bcrypt.dll /DELAYLOAD:userenv.dll /DELAYLOAD:shlwapi.dll")
+    set_target_properties(tekito_setup_preview PROPERTIES LINK_FLAGS "/MANIFEST:NO /DEPENDENTLOADFLAG:0x800 /DELAYLOAD:d2d1.dll /DELAYLOAD:dwrite.dll /DELAYLOAD:dwmapi.dll /DELAYLOAD:bcrypt.dll /DELAYLOAD:userenv.dll /DELAYLOAD:shlwapi.dll")
 endif()
 
 if(TEKITO_BUILD_BENCHMARKS)
