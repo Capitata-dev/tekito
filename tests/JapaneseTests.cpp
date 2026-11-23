@@ -773,6 +773,12 @@ void TestListColumns(const RomajiTable& table, const MiniPack& pack) {
     Require(hit(press(Key::Right)) && composer.FocusedSelection() == 4, "Right goes a column across");
     Require(hit(press(Key::Left)) && composer.FocusedSelection() == 2, "Left a column back");
     Require(hit(press(Key::Left)) && composer.FocusedSelection() == 0, "and from the first column, the first page");
+    Require(hit(press(Key::Left)) && composer.IsCandidateListOpen() && composer.FocusedSelection() == 0,
+            "Left on the first page stays in the list");
+    Require(hit(press(Key::Down)) && hit(press(Key::Right)) && composer.IsCandidateListOpen() &&
+                composer.FocusedSelection() == 3,
+            "Right from the first page: the first column, the same row");
+    Require(hit(press(Key::Left)) && hit(press(Key::Up)) && composer.FocusedSelection() == 0, "and back");
     KeyPress digit;
     digit.key = Key::Character;
     digit.character = L'2';

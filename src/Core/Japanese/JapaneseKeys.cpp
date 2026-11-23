@@ -154,18 +154,25 @@ std::optional<KeyCommand> TranslateKey(const JapaneseComposer& composer, const K
         }
         case Key::Left:
         case Key::Right: {
-            // In the columns, the column beside: as far as the list goes,
-            // back into the first page from the first column.
+            // With the list open, the column beside: from the first page
+            // into the columns on its right, as far as the list goes, and
+            // back into the first page from the first column. The phrases
+            // move with the list closed (Shift resizes them either way).
             const auto* candidates = composer.IsCandidateListOpen() ? composer.FocusedCandidates() : nullptr;
             const std::size_t pageSize = std::max<std::size_t>(options.pageSize, 1);
-            if (!key.shift && candidates && composer.FocusedSelection() >= pageSize && candidates->size() > pageSize) {
+            if (!key.shift && candidates && !candidates->empty()) {
                 const std::size_t at = composer.FocusedSelection();
+                const bool firstPage = at < pageSize;
+                if (firstPage && (key.key == Key::Left || candidates->size() <= pageSize)) {
+                    return Make(Action::Nothing);
+                }
                 if (key.key == Key::Right) {
                     const std::size_t size = candidates->size();
                     // The column on the right (the next page's first after
-                    // the third); a shorter one, its last row. With no
-                    // column on the right, round to the first page, as
-                    // Space goes: never down the same column.
+                    // the third, the first column from the first page); a
+                    // shorter one, its last row. With no column on the
+                    // right, round to the first page, as Space goes: never
+                    // down the same column.
                     const auto columnOf = [&](std::size_t index) {
                         const auto page = ListPageOf(index, size, pageSize);
                         return page.index * kListColumns + (index - page.start) / pageSize;
