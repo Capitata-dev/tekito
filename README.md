@@ -224,7 +224,7 @@ NPU. See [the privacy notice](PRIVACY.md).
 
 ## Install
 
-Download `TEKITO-1.1.1-full-installer.exe` from
+Download `TEKITO-1.1.2-full-installer.exe` from
 [Releases](https://github.com/Capitata-dev/tekito/releases/latest) and run it.
 
 - **Add Japanese input** (on when Windows shows Japanese) downloads the
