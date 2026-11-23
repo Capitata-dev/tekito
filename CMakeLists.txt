@@ -44,6 +44,14 @@ add_library(tekito_core STATIC
     src/Core/ExternalSlangProvider.cpp
     src/Core/InputStateMachine.cpp
     src/Core/Japanese/JapaneseComposer.cpp
+    src/Core/Japanese/ComposerTyping.cpp
+    src/Core/Japanese/ComposerLive.cpp
+    src/Core/Japanese/ComposerPredictions.cpp
+    src/Core/Japanese/ComposerConversion.cpp
+    src/Core/Japanese/ComposerCandidates.cpp
+    src/Core/Japanese/ComposerSlips.cpp
+    src/Core/Japanese/ComposerSentenceCheck.cpp
+    src/Core/Japanese/ComposerMix.cpp
     src/Core/Japanese/JapaneseConverter.cpp
     src/Core/Japanese/JapaneseData.cpp
     src/Core/Japanese/JapaneseDictionary.cpp
