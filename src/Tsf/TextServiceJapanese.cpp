@@ -74,32 +74,12 @@ InputMode TextService::SharedMode() const noexcept {
 }
 
 InputMode TextService::AvailableMode(InputMode mode) const noexcept {
-    if (mode == InputMode::Japanese && !JapaneseModeAvailable()) {
-        return MixedModeAvailable() ? InputMode::Mixed : InputMode::Convert;
-    }
-    if (mode == InputMode::Mixed && !MixedModeAvailable()) {
-        return JapaneseModeAvailable() ? InputMode::Japanese : InputMode::Convert;
-    }
-    return mode;
+    return userdata::AvailableMode(userSettings_, japaneseProfile_, mode);
 }
 
 InputMode TextService::ToggledMode() const noexcept {
-    if (!JapaneseTypingAvailable()) {
-        return mode_ == InputMode::Convert ? InputMode::Direct : InputMode::Convert;
-    }
-    // The modes chosen to go round (UserSettings::switchModes) that are on,
-    // in the order chosen (UserSettings::switchOrder).
-    std::vector<InputMode> round;
-    for (const auto& [mode, bit] : userdata::SwitchOrderModes(userSettings_.switchOrder)) {
-        if ((userSettings_.switchModes & bit) != 0 && AvailableMode(mode) == mode) round.push_back(mode);
-    }
-    // Fewer than two: a typing mode and Auto.
-    if (round.size() < 2) {
-        const auto typing = AvailableMode(InputMode::Japanese);
-        return mode_ == typing ? InputMode::Convert : typing;
-    }
-    const auto at = std::find(round.begin(), round.end(), mode_);
-    return at == round.end() || at + 1 == round.end() ? round.front() : *(at + 1);
+    // As the desktop companion switches too (userdata::NextSwitchMode).
+    return userdata::NextSwitchMode(userSettings_, japaneseProfile_, mode_);
 }
 
 void TextService::UpdateActiveProfile() {

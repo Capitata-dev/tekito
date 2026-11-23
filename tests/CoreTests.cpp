@@ -2546,6 +2546,25 @@ void TestSqliteUserSettingsRepository() {
                     modes[2].first == tekito::InputMode::Direct && modes[3].first == tekito::InputMode::Mixed &&
                     !tekito::userdata::ValidSwitchOrder(1224) && !tekito::userdata::ValidSwitchOrder(12345),
                 "the switch order lists each mode once, in the order chosen");
+        // The switch key's next mode, as the companion's click goes too.
+        using tekito::InputMode;
+        tekito::userdata::UserSettings round;
+        round.japaneseEnabled = true;
+        round.mixedTypingEnabled = true;
+        round.switchOrder = 1234;
+        round.switchModes = 1 | 2 | 4;
+        const auto next = [&](InputMode mode, bool japanese = true) {
+            return tekito::userdata::NextSwitchMode(round, japanese, mode);
+        };
+        Require(next(InputMode::Japanese) == InputMode::Mixed && next(InputMode::Mixed) == InputMode::Convert &&
+                    next(InputMode::Convert) == InputMode::Japanese && next(InputMode::Direct) == InputMode::Japanese,
+                "the switch key goes round the chosen modes in order");
+        Require(next(InputMode::Convert, false) == InputMode::Direct && next(InputMode::Direct, false) == InputMode::Convert,
+                "on the English keyboard, Auto and Direct");
+        round.mixedTypingEnabled = false;
+        Require(next(InputMode::Japanese) == InputMode::Convert && next(InputMode::Convert) == InputMode::Japanese &&
+                    tekito::userdata::AvailableMode(round, true, InputMode::Mixed) == InputMode::Japanese,
+                "a mode turned off is left out, Mix standing for Japanese");
     }
     {
         // Older values: 常用 and 人名用, and numbers as typed.

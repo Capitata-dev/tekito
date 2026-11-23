@@ -346,6 +346,39 @@ struct UserSettings {
     return modes;
 }
 
+// `mode`, or the one that stands in for it when it is off here: Japanese
+// and Mix for each other, then Auto. `japaneseProfile`: TEKITO is the
+// Japanese keyboard (where Japanese and Mix can be modes at all).
+[[nodiscard]] inline InputMode AvailableMode(const UserSettings& settings, bool japaneseProfile, InputMode mode) noexcept {
+    const bool japanese = japaneseProfile && settings.japaneseEnabled;
+    const bool mixed = japaneseProfile && settings.mixedTypingEnabled;
+    if (mode == InputMode::Japanese && !japanese) return mixed ? InputMode::Mixed : InputMode::Convert;
+    if (mode == InputMode::Mixed && !mixed) return japanese ? InputMode::Japanese : InputMode::Convert;
+    return mode;
+}
+
+// The mode the switch key goes to from `current`: the next of the modes
+// chosen to go round (switchModes) that are on, in the order chosen
+// (switchOrder); with fewer than two, a typing mode and Auto. Without
+// Japanese typing, Auto and Direct.
+[[nodiscard]] inline InputMode NextSwitchMode(const UserSettings& settings, bool japaneseProfile, InputMode current) noexcept {
+    const bool typing = japaneseProfile && (settings.japaneseEnabled || settings.mixedTypingEnabled);
+    if (!typing) return current == InputMode::Convert ? InputMode::Direct : InputMode::Convert;
+    std::array<InputMode, 4> round{};
+    std::size_t count = 0;
+    for (const auto& [mode, bit] : SwitchOrderModes(settings.switchOrder)) {
+        if ((settings.switchModes & bit) != 0 && AvailableMode(settings, japaneseProfile, mode) == mode) round[count++] = mode;
+    }
+    if (count < 2) {
+        const auto typingMode = AvailableMode(settings, japaneseProfile, InputMode::Japanese);
+        return current == typingMode ? InputMode::Convert : typingMode;
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+        if (round[i] == current) return i + 1 == count ? round[0] : round[i + 1];
+    }
+    return round[0];
+}
+
 // Mix's ways of writing beside Japanese mode's: the name each is stored
 // under, Settings' name for it, Mix's field, Japanese mode's, and (numbers)
 // its range.

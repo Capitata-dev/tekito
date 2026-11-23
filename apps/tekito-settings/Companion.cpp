@@ -84,6 +84,25 @@ constexpr float kSwingDegrees = 14.0f;
 constexpr UINT kMenuSettings = 1;
 constexpr UINT kMenuHide = 2;
 
+// The mode it shows with its color, as the taskbar's mode icons: Auto blue
+// (its own), Mix orange, Japanese navy; grey with no conversion (Direct)
+// and on another language's keyboard.
+enum class Shown { Auto, Mixed, Japanese, Off };
+struct Look {
+    tekito::companion::Stop body[5];
+    tekito::companion::Stop ring[2];
+};
+constexpr Look kLooks[] = {
+    {{{0.0f, 0xa6c8ff}, {0.3f, 0x3f88ff}, {0.55f, 0x0668ff}, {0.75f, 0x0590ff}, {1.0f, 0x00dcff}},
+     {{0.0f, 0x6fe8ff}, {1.0f, 0x10b6fe}}},
+    {{{0.0f, 0xffe1a6}, {0.3f, 0xffab3f}, {0.55f, 0xf7891e}, {0.75f, 0xf9a826}, {1.0f, 0xfbe320}},
+     {{0.0f, 0xfff08a}, {1.0f, 0xf7b21e}}},
+    {{{0.0f, 0x8b98c8}, {0.3f, 0x34428a}, {0.55f, 0x16205a}, {0.75f, 0x1f3070}, {1.0f, 0x3f63b8}},
+     {{0.0f, 0x9fb4ff}, {1.0f, 0x5470d8}}},
+    {{{0.0f, 0xe4e4e4}, {0.3f, 0xb9b9b9}, {0.55f, 0x9b9b9b}, {0.75f, 0xa9a9a9}, {1.0f, 0xcdcdcd}},
+     {{0.0f, 0xe0e0e0}, {1.0f, 0xa0a0a0}}},
+};
+
 std::wstring AppPath() {
     std::wstring path(MAX_PATH, L'\0');
     const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
@@ -250,6 +269,10 @@ public:
         if (GetEnvironmentVariableW(L"TEKITO_COMPANION_IDLE", idle, 16) > 0) forcedIdleMs_ = _wtoi(idle) * 1000;
         // TEKITO_COMPANION_NO_SECRET=1: as if secret mode were off.
         noSecret_ = GetEnvironmentVariableW(L"TEKITO_COMPANION_NO_SECRET", nullptr, 0) > 0;
+        // TEKITO_COMPANION_LOOK=<0-3>: in Auto's, Mix's, Japanese mode's or
+        // no conversion's colors, whatever the mode.
+        wchar_t look[4]{};
+        if (GetEnvironmentVariableW(L"TEKITO_COMPANION_LOOK", look, 4) > 0) forcedLook_ = std::clamp(_wtoi(look), 0, 3);
         // TEKITO_COMPANION_FIDGETS=1: something of its own every 2 to 3 seconds.
         if (GetEnvironmentVariableW(L"TEKITO_COMPANION_FIDGETS", nullptr, 0) > 0) fidgetEvery_ = {2.0, 3.0};
 #endif
@@ -335,6 +358,7 @@ private:
                     if (!KeepOnScreen(place_)) MoveTo(DefaultPlace());
                     SavePlace();
                 } else {
+                    SwitchMode();
                     Cheer();
                 }
             }
@@ -417,14 +441,17 @@ private:
         return zBrush_ && SUCCEEDED(target_->CreateSolidColorBrush(Color(0xffffff), &white_));
     }
 
-    // The gradients, turned to `hue` degrees while Rainbow is on.
-    void EnsureBrushes(float turn) {
-        if (turn == brushHue_ && bodyBrush_) return;
+    // The gradients in `look`'s colors, turned to `hue` degrees while
+    // Rainbow is on.
+    void EnsureBrushes(float turn, Shown look) {
+        if (turn == brushHue_ && look == brushLook_ && bodyBrush_) return;
         using namespace tekito::companion;
         brushHue_ = turn;
-        D2D1_GRADIENT_STOP stops[std::size(kBodyStops)];
-        for (std::size_t i = 0; i < std::size(kBodyStops); ++i) {
-            stops[i] = {kBodyStops[i].offset, Turned(Color(kBodyStops[i].rgb), turn)};
+        brushLook_ = look;
+        const Look& colors = kLooks[static_cast<int>(look)];
+        D2D1_GRADIENT_STOP stops[std::size(colors.body)];
+        for (std::size_t i = 0; i < std::size(colors.body); ++i) {
+            stops[i] = {colors.body[i].offset, Turned(Color(colors.body[i].rgb), turn)};
         }
         ComPtr<ID2D1GradientStopCollection> collection;
         target_->CreateGradientStopCollection(stops, static_cast<UINT32>(std::size(stops)), &collection);
@@ -436,9 +463,9 @@ private:
             D2D1::LinearGradientBrushProperties(D2D1::Point2F(0.1f, 0.05f), D2D1::Point2F(0.9f, 0.95f)),
             D2D1::BrushProperties(1.0f, box), collection.Get(), &bodyBrush_);
 
-        D2D1_GRADIENT_STOP ring[std::size(kRingStops)];
-        for (std::size_t i = 0; i < std::size(kRingStops); ++i) {
-            ring[i] = {kRingStops[i].offset, Turned(Color(kRingStops[i].rgb), turn)};
+        D2D1_GRADIENT_STOP ring[std::size(colors.ring)];
+        for (std::size_t i = 0; i < std::size(colors.ring); ++i) {
+            ring[i] = {colors.ring[i].offset, Turned(Color(colors.ring[i].rgb), turn)};
         }
         collection.Reset();
         target_->CreateGradientStopCollection(ring, static_cast<UINT32>(std::size(ring)), &collection);
@@ -556,7 +583,8 @@ private:
         target_->BeginDraw();
         target_->Clear(D2D1::ColorF(0, 0, 0, 0));
         const float turn = rainbow_ ? static_cast<float>(std::fmod(t / kRainbowPeriod, 1.0) * 360.0) : 0.0f;
-        EnsureBrushes(rainbow_ ? std::round(turn) : 0.0f);
+        // Rainbow (its own colors going round) over the mode's.
+        EnsureBrushes(rainbow_ ? std::round(turn) : 0.0f, rainbow_ ? Shown::Auto : shown_);
         target_->SetTransform(face);
         target_->FillGeometry(body_.Get(), bodyBrush_.Get());
         target_->FillGeometry(body_.Get(), sheenBrush_.Get());
@@ -702,6 +730,58 @@ private:
             modeGeneration_ = runtime_->ModeGeneration();
             Cheer();
         }
+        UpdateShown();
+    }
+
+    // The mode of the keyboard the app in front types with: TEKITO's
+    // Japanese keyboard's, its English keyboard's, or none (another
+    // language's keyboard). Windows tells the language only: on the
+    // Japanese keyboard it is taken to be TEKITO.
+    void UpdateShown() {
+        const HWND front = GetForegroundWindow();
+        if (front == hwnd_) return;
+        const DWORD thread = front ? GetWindowThreadProcessId(front, nullptr) : 0;
+        const auto language = PRIMARYLANGID(LOWORD(reinterpret_cast<ULONG_PTR>(GetKeyboardLayout(thread))));
+        profile_ = language == LANG_JAPANESE ? Profile::Japanese
+                   : language == LANG_ENGLISH ? Profile::English
+                                              : Profile::None;
+        if (profile_ == Profile::None) {
+            shown_ = Shown::Off;
+            return;
+        }
+        const auto mode = profile_ == Profile::Japanese
+                              ? tekito::userdata::AvailableMode(settings_, true, runtime_->JapaneseMode())
+                              : runtime_->Mode();
+        shown_ = mode == tekito::InputMode::Japanese ? Shown::Japanese
+                 : mode == tekito::InputMode::Mixed  ? Shown::Mixed
+                 : mode == tekito::InputMode::Direct ? Shown::Off
+                                                     : Shown::Auto;
+        if (forcedLook_ >= 0) shown_ = static_cast<Shown>(forcedLook_);
+    }
+
+    // A click: the next mode, as the switch key goes, kept as Settings keeps
+    // it (the mode TEKITO starts in next time).
+    void SwitchMode() {
+        if (profile_ == Profile::None) return;
+        const bool japanese = profile_ == Profile::Japanese;
+        const auto current = japanese ? tekito::userdata::AvailableMode(settings_, true, runtime_->JapaneseMode())
+                                      : runtime_->Mode();
+        const auto next = tekito::userdata::NextSwitchMode(settings_, japanese, current);
+        tekito::userdata::UserSettings saved;
+        if (!repository_->LoadSettings(saved)) saved = settings_;
+        if (japanese) {
+            runtime_->SetJapaneseMode(next);
+            saved.lastJapaneseProfileMode = next;
+            if (!tekito::TypesJapanese(next)) saved.japaneseProfileEnglishMode = next;
+        } else {
+            runtime_->SetMode(next);
+            saved.lastInputMode = next;
+        }
+        if (repository_->SaveSettings(saved)) {
+            settings_ = saved;
+            runtime_->NotifySettingsChanged();
+        }
+        UpdateShown();
     }
 
     void ShowMenu() {
@@ -807,6 +887,11 @@ private:
     ComPtr<ID2D1SolidColorBrush> zBrush_;
     D2D1_RECT_F bodyBox_{};
     float brushHue_{-1.0f};
+    Shown brushLook_{Shown::Auto};
+    // Whose mode it shows (UpdateShown), and which.
+    enum class Profile { Japanese, English, None };
+    Profile profile_{Profile::None};
+    Shown shown_{Shown::Auto};
 
     HDC memory_{nullptr};
     HBITMAP bitmap_{nullptr};
@@ -832,6 +917,7 @@ private:
     std::mt19937 random_{static_cast<std::uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count())};
     DWORD idleMs_{0};
     int forcedIdleMs_{-1};
+    int forcedLook_{-1};
     bool noSecret_{false};
     bool drowsy_{false};
     float swing_{0.0f};
