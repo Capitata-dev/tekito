@@ -24,6 +24,16 @@ public:
         bool corrected{false};
         // The engine's other choices, best first.
         std::vector<std::wstring> others;
+        // Slang offered for the word and slang written out (sus:
+        // suspicious), as English Auto offers them; `slang`: a slang word.
+        struct Offer {
+            std::wstring text;
+            bool slang{false};
+        };
+        std::vector<Offer> slang;
+        // The word is the one before it typed again (the the): English Auto
+        // offers to take it out.
+        bool repeated{false};
     };
     // `typed`: lower-case letters. `before`: the English typed just before
     // it in the sentence, as context.

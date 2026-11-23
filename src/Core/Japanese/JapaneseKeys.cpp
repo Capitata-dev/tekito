@@ -428,7 +428,8 @@ CandidateList CandidateListFor(const JapaneseComposer& composer, std::size_t pag
         // choose from the first page only.
         list.rows.push_back({candidate.text, reading, static_cast<std::uint32_t>(i < pageSize ? i + 1 : 0),
                              candidate.slip || candidate.spellingCorrection || candidate.englishCorrection,
-                             i > 0 && (*candidates)[i - 1].chunk && !candidate.chunk, candidate.asTyped});
+                             i > 0 && (*candidates)[i - 1].chunk && !candidate.chunk, candidate.asTyped,
+                             candidate.slang, candidate.repeat});
     }
     MarkWidths(list.rows);
     const std::size_t selected = std::min(composer.FocusedSelection(), candidates->size() - 1);

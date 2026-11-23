@@ -142,6 +142,10 @@ struct CandidateList {
         bool groupStart{false};
         // Mix: the English keys as typed, beside a word spelled otherwise.
         bool asTyped{false};
+        // Mix: slang offered for an English word; the empty row that takes
+        // out a word typed twice.
+        bool slang{false};
+        bool repeat{false};
         // The same as another row but for its width: the wider or the
         // narrower of the two (None: no such row).
         enum class Width : std::uint8_t { None, Full, Half };

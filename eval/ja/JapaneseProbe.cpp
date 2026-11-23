@@ -454,21 +454,24 @@ int main(int argc, char** argv) {
         if (sentences) composer.ShowCandidates();
         if (const auto* list = composer.FocusedCandidates()) {
             // With the tags the list shows: [?] a maybe, [=] as typed,
-            // [F] and [H] full- and half-width.
+            // [S] slang, [R] taking out a word typed twice, [F] and [H]
+            // full- and half-width.
             std::vector<tekito::japanese::CandidateList::Row> tagged;
             for (const auto& candidate : *list) {
                 tekito::japanese::CandidateList::Row row;
                 row.text = candidate.text;
                 row.suggestion = candidate.slip || candidate.spellingCorrection || candidate.englishCorrection;
                 row.asTyped = candidate.asTyped;
+                row.slang = candidate.slang;
+                row.repeat = candidate.repeat;
                 tagged.push_back(std::move(row));
             }
             tekito::japanese::MarkWidths(tagged);
             using Width = tekito::japanese::CandidateList::Row::Width;
             for (std::size_t i = 0; i < list->size() && i < rows; ++i) {
                 const auto& row = tagged[i];
-                const char* tag = row.suggestion ? "[?]" : row.asTyped ? "[=]" : row.width == Width::Full ? "[F]"
-                                                     : row.width == Width::Half ? "[H]" : "";
+                const char* tag = row.repeat ? "[R]" : row.suggestion ? "[?]" : row.asTyped ? "[=]" : row.slang ? "[S]"
+                                  : row.width == Width::Full ? "[F]" : row.width == Width::Half ? "[H]" : "";
                 std::cout << (i ? " | " : "") << ((*list)[i].chunk ? "^" : "") << Narrow((*list)[i].text) << tag;
             }
             std::cout << "  (" << list->size() << ")";

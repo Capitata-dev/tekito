@@ -932,10 +932,14 @@ void TextService::ShowJapaneseCandidates(ITfContext* context, TfEditCookie editC
         row.id = list.rows[i].number;
         // One tag a row: a "maybe", what was typed, then its width.
         using Width = japanese::CandidateList::Row::Width;
-        if (list.rows[i].suggestion) {
+        if (list.rows[i].repeat) {
+            row.sourceFlags |= CandidateSourceDoubledWord;
+        } else if (list.rows[i].suggestion) {
             row.label = SemanticLabel::Suggestion;
         } else if (list.rows[i].asTyped) {
             row.isOriginal = true;
+        } else if (list.rows[i].slang) {
+            row.label = SemanticLabel::Slang;
         } else if (list.rows[i].width != Width::None) {
             row.label = list.rows[i].width == Width::Full ? SemanticLabel::FullWidth : SemanticLabel::HalfWidth;
         }

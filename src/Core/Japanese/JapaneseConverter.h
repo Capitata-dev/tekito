@@ -45,6 +45,10 @@ struct PhraseCandidate {
     // and the keys as typed beside it ("moshikashite" and "as typed").
     bool englishCorrection{false};
     bool asTyped{false};
+    // Mix: slang offered for an English word (English Auto's), and the
+    // empty one that takes out a word typed twice in an English sentence.
+    bool slang{false};
+    bool repeat{false};
     // Set when the candidate is the whole input read again (a slip across
     // phrases): choosing it makes this the reading, as one phrase.
     std::wstring reading;

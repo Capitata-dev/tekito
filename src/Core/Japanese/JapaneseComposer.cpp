@@ -3420,11 +3420,25 @@ std::vector<PhraseCandidate> JapaneseComposer::EnglishCandidates(const std::wstr
         if (!seen) candidates.push_back({std::move(text), 0, kind, false});
     };
     add(written, PhraseCandidate::Kind::English);
-    // Its emoji next, as English Auto offers it (heart: ❤️).
-    if (englishSpelling_ && emojiOnFirstPage_) {
+    // What English Auto offers for the word.
+    std::optional<EnglishSpelling::Result> spelled;
+    if (englishSpelling_) {
         std::wstring lower = Keys(false);
         for (auto& c : lower) c = static_cast<wchar_t>(std::towlower(c));
-        for (const auto& other : englishSpelling_->Spell(lower, englishText_).others) {
+        spelled = englishSpelling_->Spell(lower, englishText_);
+    }
+    // The word typed twice in an English sentence (the the), with nothing
+    // after it: taking it out, offered right after it. Not where Japanese
+    // is in the sentence.
+    if (spelled && spelled->repeated && !japaneseInSentence_ && !written.empty() &&
+        std::all_of(written.begin(), written.end(), [](wchar_t c) { return std::iswalpha(c) != 0 || c == L'\''; })) {
+        PhraseCandidate removal{L"", 0, PhraseCandidate::Kind::English, false};
+        removal.repeat = true;
+        candidates.push_back(std::move(removal));
+    }
+    // Its emoji next, as English Auto offers it (heart: ❤️).
+    if (spelled && emojiOnFirstPage_) {
+        for (const auto& other : spelled->others) {
             const bool emoji = !other.empty() &&
                                std::none_of(other.begin(), other.end(), [](wchar_t c) { return std::iswalnum(c) != 0; }) &&
                                std::any_of(other.begin(), other.end(), [](wchar_t c) { return c >= 0x2190; });
@@ -3443,6 +3457,15 @@ std::vector<PhraseCandidate> JapaneseComposer::EnglishCandidates(const std::wstr
     // The word written with a hyphen it was typed without (usbc: USB-C).
     if (chunkJudge_) {
         if (const auto hyphened = chunkJudge_->Hyphenated(Keys(false))) add(*hyphened, PhraseCandidate::Kind::English);
+    }
+    // Slang offered for it and slang written out, as English Auto offers
+    // them (sus: suspicious); never first.
+    if (spelled) {
+        for (const auto& offer : spelled->slang) {
+            const std::size_t before = candidates.size();
+            add(offer.text, PhraseCandidate::Kind::English);
+            if (candidates.size() > before) candidates.back().slang = offer.slang;
+        }
     }
     // How it is written in katakana (ギットハブ), then as Japanese.
     // As written when a slip was put right (review: レビュー).
@@ -4891,6 +4914,8 @@ std::vector<PreeditSegment> JapaneseComposer::Segments() const {
         bool englishBefore = false;
         for (const auto& chunk : settled_) {
             const bool english = chunk.marksOnly ? englishBefore : chunk.isEnglish;
+            // A word taken out (the the) shows nothing.
+            if (english && !chunk.marksOnly && chunk.english.empty()) continue;
             std::wstring text;
             if (!segments.empty() && englishBefore && english && !chunk.marksOnly) text.push_back(L' ');
             text += english ? chunk.english : chunk.japanese;
@@ -5571,6 +5596,8 @@ std::wstring JapaneseComposer::JoinChunks(const std::vector<SettledChunk>& chunk
     bool englishBefore = false;
     for (const auto& chunk : chunks) {
         const bool english = chunk.marksOnly ? englishBefore : chunk.isEnglish;
+        // A word taken out (the the): nothing, and no space for it.
+        if (english && !chunk.marksOnly && chunk.english.empty()) continue;
         // English words apart; punctuation and Japanese against what is before.
         if (!text.empty() && englishBefore && english && !chunk.marksOnly) text.push_back(L' ');
         text += english ? chunk.english : chunk.japanese;

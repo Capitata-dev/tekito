@@ -33,8 +33,13 @@ EnglishSpelling::Result EnglishSpelling::Spell(std::wstring_view typed, std::wst
     request.options.spacelessEnglish = false;
     auto candidates = engine_.Convert(request).candidates;
     for (const auto& candidate : candidates) {
+        if ((candidate.sourceFlags & CandidateSourceDoubledWord) != 0) result.repeated = true;
         if (candidate.text.empty() || SameIgnoringCase(candidate.text, typed)) continue;
         if (result.others.size() < 8) result.others.push_back(candidate.text);
+        const bool slang = candidate.label == SemanticLabel::Slang;
+        if (!candidate.isOriginal && (slang || (candidate.policyFlags & CandidatePolicyExpand) != 0)) {
+            result.slang.push_back({candidate.text, slang});
+        }
     }
     // Space decides as it does in English Auto.
     InputStateMachine state;
