@@ -933,14 +933,16 @@ void TextService::ShowJapaneseCandidates(ITfContext* context, TfEditCookie editC
         if (list.rows[i].suggestion) row.label = SemanticLabel::Suggestion;
         row.groupStart = list.rows[i].groupStart;
         // Only the rows on the page shown are looked up.
-        row.hasMeaning = userSettings_.meaningsEnabled && i >= list.pageStart && i < list.pageStart + list.count &&
+        row.hasMeaning = userSettings_.meaningsEnabled && list.columnRows == 0 && i >= list.pageStart &&
+                         i < list.pageStart + list.count &&
                          japanese::ProcessMeanings()
                              .Lookup(list.rows[i].text, list.rows[i].reading, MeaningLanguage())
                              .has_value();
         rows.push_back(std::move(row));
     }
     const auto& selected = list.selected;
-    const CandidateDetail detail = selected && *selected < list.rows.size()
+    // The columns after the first page show no meaning beside them.
+    const CandidateDetail detail = selected && *selected < list.rows.size() && list.columnRows == 0
                                        ? MeaningFor(list.rows[*selected].text, list.rows[*selected].reading)
                                        : CandidateDetail{};
     // Predictions follow the caret; candidates go under their phrase.
@@ -952,7 +954,7 @@ void TextService::ShowJapaneseCandidates(ITfContext* context, TfEditCookie editC
     candidateWindow_.SetRainbow(userSettings_.rainbowAccent);
     candidateWindow_.SetJapanese(userdata::UseJapaneseUi(userSettings_.uiLanguage));
     candidateWindow_.Show(anchor, rows, selected ? *selected : CandidateWindow::kNoSelection, list.pageStart,
-                          list.count, detail, caption);
+                          list.count, detail, caption, list.columnRows);
 }
 
 HRESULT TextService::CommitJapanese(ITfContext* context, TfEditCookie editCookie) {

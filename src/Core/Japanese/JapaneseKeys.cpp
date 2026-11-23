@@ -96,23 +96,49 @@ std::optional<KeyCommand> TranslateKey(const JapaneseComposer& composer, const K
         case Key::Up:
             return Make(Action::PreviousCandidate);
         case Key::PageDown:
-        case Key::PageUp:
-            // With the list open, a page at a time.
-            if (!composer.IsCandidateListOpen()) break;
-            return WithDelta(key.key == Key::PageDown ? Action::NextCandidate : Action::PreviousCandidate,
-                             static_cast<int>(std::max<std::size_t>(options.pageSize, 1)));
+        case Key::PageUp: {
+            // With the list open, a page at a time: the first page, then
+            // the pages of columns after it.
+            if (!composer.IsCandidateListOpen() || !composer.FocusedCandidates()) break;
+            const std::size_t size = composer.FocusedCandidates()->size();
+            const std::size_t at = composer.FocusedSelection();
+            const auto page = ListPageOf(at, size, options.pageSize);
+            if (key.key == Key::PageDown) {
+                const std::size_t next = page.start + page.count;
+                if (next >= size) break;
+                return WithDelta(Action::NextCandidate, static_cast<int>(next - at));
+            }
+            if (page.start == 0) break;
+            const auto before = ListPageOf(page.start - 1, size, options.pageSize);
+            return WithDelta(Action::PreviousCandidate, static_cast<int>(at - before.start));
+        }
         case Key::Left:
-        case Key::Right:
+        case Key::Right: {
+            // In the columns, the column beside: as far as the list goes,
+            // back into the first page from the first column.
+            const auto* candidates = composer.IsCandidateListOpen() ? composer.FocusedCandidates() : nullptr;
+            const std::size_t pageSize = std::max<std::size_t>(options.pageSize, 1);
+            if (!key.shift && candidates && composer.FocusedSelection() >= pageSize && candidates->size() > pageSize) {
+                const std::size_t at = composer.FocusedSelection();
+                if (key.key == Key::Right) {
+                    const std::size_t to = std::min(at + pageSize, candidates->size() - 1);
+                    // Past the last column, on to the first as Space goes.
+                    return WithDelta(Action::NextCandidate, static_cast<int>(to == at ? 1 : to - at));
+                }
+                return WithDelta(Action::PreviousCandidate, static_cast<int>(std::min(at, pageSize)));
+            }
             return WithDelta(key.shift ? Action::Resize : Action::MoveFocus, key.key == Key::Left ? -1 : 1);
+        }
         default:
             break;
         }
-        // With the list open, 1-9 choose from the page shown.
+        // With the list open, 1-9 choose from the first page, the one
+        // numbered.
         if (key.digit >= 1 && key.digit <= 9 && composer.IsCandidateListOpen() && !key.shift) {
-            const std::size_t pageSize = std::max<std::size_t>(options.pageSize, 1);
-            const std::size_t page = composer.FocusedSelection() / pageSize * pageSize;
+            // In the columns, unnumbered, a digit stays with the list.
+            if (composer.FocusedSelection() >= std::max<std::size_t>(options.pageSize, 1)) return Make(Action::Nothing);
             const auto* candidates = composer.FocusedCandidates();
-            const std::size_t index = page + static_cast<std::size_t>(key.digit - 1);
+            const std::size_t index = static_cast<std::size_t>(key.digit - 1);
             if (candidates && index < candidates->size()) {
                 auto command = Make(Action::SelectCandidate);
                 command.index = index;
@@ -185,6 +211,15 @@ std::optional<KeyCommand> TranslateKey(const JapaneseComposer& composer, const K
     // converted it steps through them.
     if (key.key == Key::Tab && (composer.IsTyping() || composer.IsConverted())) {
         if (composer.IsConverted() && !composer.IsLivePreview()) {
+            // With the list open: Tab goes into the columns after the first
+            // page, Shift+Tab back to its top.
+            const auto* candidates = composer.IsCandidateListOpen() ? composer.FocusedCandidates() : nullptr;
+            const std::size_t pageSize = std::max<std::size_t>(options.pageSize, 1);
+            if (candidates && candidates->size() > pageSize) {
+                const std::size_t at = composer.FocusedSelection();
+                if (!key.shift && at < pageSize) return WithDelta(Action::NextCandidate, static_cast<int>(pageSize - at));
+                if (key.shift && at >= pageSize) return WithDelta(Action::PreviousCandidate, static_cast<int>(at));
+            }
             return Make(key.shift ? Action::PreviousCandidate : Action::NextCandidate);
         }
         return Make(Action::ShowCandidates);
@@ -296,8 +331,18 @@ KeyOutcome ApplyKey(JapaneseComposer& composer, const KeyCommand& command) {
     case Action::InsertOutside:
         outcome.outside = std::wstring(1, command.character);
         break;
+    case Action::Nothing:
+        break;
     }
     return outcome;
+}
+
+ListPage ListPageOf(std::size_t index, std::size_t size, std::size_t pageSize) noexcept {
+    pageSize = std::max<std::size_t>(pageSize, 1);
+    if (index < pageSize || size <= pageSize) return {0, std::min(pageSize, size), false};
+    const std::size_t grid = kListColumns * pageSize;
+    const std::size_t start = pageSize + (index - pageSize) / grid * grid;
+    return {start, std::min(grid, size - start), true};
 }
 
 CandidateList CandidateListFor(const JapaneseComposer& composer, std::size_t pageSize) {
@@ -319,14 +364,18 @@ CandidateList CandidateListFor(const JapaneseComposer& composer, std::size_t pag
     const std::wstring reading = composer.FocusedReading();
     for (std::size_t i = 0; i < candidates->size(); ++i) {
         const auto& candidate = (*candidates)[i];
-        list.rows.push_back({candidate.text, reading, static_cast<std::uint32_t>(i % pageSize + 1),
+        // The first page numbered; the columns after it not, as digits
+        // choose from the first page only.
+        list.rows.push_back({candidate.text, reading, static_cast<std::uint32_t>(i < pageSize ? i + 1 : 0),
                              candidate.slip || candidate.spellingCorrection,
                              i > 0 && (*candidates)[i - 1].chunk && !candidate.chunk});
     }
     const std::size_t selected = std::min(composer.FocusedSelection(), candidates->size() - 1);
     list.selected = selected;
-    list.pageStart = selected / pageSize * pageSize;
-    list.count = std::min(pageSize, list.rows.size() - list.pageStart);
+    const auto page = ListPageOf(selected, list.rows.size(), pageSize);
+    list.pageStart = page.start;
+    list.count = page.count;
+    list.columnRows = page.columns ? pageSize : 0;
     return list;
 }
 

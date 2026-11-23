@@ -253,10 +253,11 @@ std::vector<tekito::Candidate> SampleKanjiCandidates() {
 // A list from a UTF-8 file (`list <file>`): a line for each candidate,
 // its text, then after tabs a tag (suggestion, emoji, original) and m when
 // it has a meaning; "#selected N", "#page N" (the first row shown), "#rows N"
-// and "#detail headword|sense|sense" set the rest.
+// "#columns N" (the pages after the first) and "#detail headword|sense|sense"
+// set the rest.
 struct FileList {
     std::vector<tekito::Candidate> candidates;
-    std::size_t selected{0}, pageStart{0}, rows{12};
+    std::size_t selected{0}, pageStart{0}, rows{12}, columns{0};
     tekito::tsf::CandidateDetail detail;
 };
 
@@ -279,6 +280,7 @@ FileList ReadList(const wchar_t* path) {
         if (line.rfind(L"#selected ", 0) == 0) list.selected = std::stoul(line.substr(10));
         else if (line.rfind(L"#page ", 0) == 0) list.pageStart = std::stoul(line.substr(6));
         else if (line.rfind(L"#rows ", 0) == 0) list.rows = std::stoul(line.substr(6));
+        else if (line.rfind(L"#columns ", 0) == 0) list.columns = std::stoul(line.substr(9));
         else if (line.rfind(L"#detail ", 0) == 0) {
             std::wstring rest = line.substr(8);
             std::vector<std::wstring> parts;
@@ -490,8 +492,11 @@ int wmain(int argc, wchar_t** argv) {
     } else if (listFile) {
         auto list = ReadList(listFile);
         // The ids number each page from 1.
-        const std::size_t rows = std::min(list.rows, list.candidates.size() - list.pageStart);
-        window.Show(caret, list.candidates, list.selected, list.pageStart, rows, list.detail, caption);
+        // "#columns N": the page after the first, N columns of "#rows".
+        const std::size_t pageRows = list.columns > 0 ? list.rows * list.columns : list.rows;
+        const std::size_t rows = std::min(pageRows, list.candidates.size() - list.pageStart);
+        window.Show(caret, list.candidates, list.selected, list.pageStart, rows, list.detail, caption,
+                    list.columns > 0 ? list.rows : 0);
     } else if (page) {
         window.Show(caret, candidates, 0, 0, 12, detail, caption);
     } else {

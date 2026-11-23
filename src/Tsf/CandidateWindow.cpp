@@ -81,8 +81,13 @@ constexpr int kIndicatorWidth = 3;
 constexpr int kIndicatorInset = 14;
 constexpr int kMinWidth = 200;
 constexpr int kMaxWidth = 440;
-// The meaning pane beside the list: a fixed width, as tall as the list or
-// its text (up to kDetailMaxHeight, dropping later senses to fit).
+// The pages after the first: columns of a fixed width each, as wide as the
+// widest candidate on the page within these.
+constexpr int kColumnMinWidth = 96;
+constexpr int kColumnMaxWidth = 220;
+constexpr int kColumnGap = 4;
+// The meaning beside the list: a fixed width, its text level with the
+// selected row (up to kDetailMaxHeight, dropping later senses to fit).
 constexpr int kDetailWidth = 250;
 constexpr int kDetailPadding = 14;
 constexpr int kDetailMaxHeight = 300;
@@ -355,6 +360,8 @@ struct Frame {
     std::size_t selectedRow{kNoRow};
     std::size_t firstIndex{0};
     std::size_t totalCount{0};
+    // Columns of this many rows, down then across (0: one column).
+    std::size_t columnRows{0};
     std::uint64_t generation{0};
     int style{0};  // CandidateWindow::Style
     int zoom{100};  // CandidateWindow::SetZoom, percent
@@ -605,8 +612,17 @@ struct Layout {
     float indicatorInset{0.0f};
     // The caption's line above the rows (0: none).
     float captionHeight{0.0f};
+    // Columns: rows in each, a column's width and its pitch (0: one column).
+    std::size_t columnRows{0};
+    float columnWidth{0.0f};
+    float columnPitch{0.0f};
 
     [[nodiscard]] D2D1_RECT_F RowRect(std::size_t row) const {
+        if (columnRows > 0) {
+            const float left = padding + static_cast<float>(row / columnRows) * columnPitch;
+            const float top = padding + captionHeight + static_cast<float>(row % columnRows) * rowPitch;
+            return D2D1::RectF(left, top, left + columnWidth, top + rowHeight);
+        }
         const float top = padding + captionHeight + static_cast<float>(row) * rowPitch;
         return D2D1::RectF(padding, top, rowRight, top + rowHeight);
     }
@@ -946,7 +962,7 @@ void DrawRows(ID2D1RenderTarget* target, IDWriteFactory* factory, const TextForm
         if ((onlyRow != kNoRow && i != onlyRow) || i == skipRow) continue;
         const Row& row = frame.rows[i];
         const D2D1_RECT_F rect = layout.RowRect(i);
-        if (row.groupStart && !selected) {
+        if (row.groupStart && !selected && (layout.columnRows == 0 || i % layout.columnRows != 0)) {
             // Between two kinds of candidates, in the gap above the row.
             const float y = std::round(rect.top - (layout.rowPitch - layout.rowHeight) / 2.0f) + 0.5f;
             auto line = SolidBrush(target, WithAlpha(p.mutedText, p.mutedText.a * 0.35f));
@@ -1089,11 +1105,15 @@ void DrawCaption(ID2D1RenderTarget* target, const TextFormats& formats, const La
 
 void DrawDetail(ID2D1RenderTarget* target, const Layout& layout, const Style& style) {
     if (!layout.detailText) return;
-    auto line = SolidBrush(target, style.palette.tagFill);
-    const float x = std::round(layout.listWidth) + 0.5f;
-    target->DrawLine(D2D1::Point2F(x, layout.padding * 2.0f),
-                     D2D1::Point2F(x, static_cast<float>(layout.height) - layout.padding * 2.0f), line.get(),
-                     std::max(1.0f, layout.scale));
+    // A line between the list and its meaning, unless the list's scroll
+    // indicator already stands there.
+    if (!layout.indicator) {
+        auto line = SolidBrush(target, style.palette.tagFill);
+        const float x = std::round(layout.listWidth) + 0.5f;
+        target->DrawLine(D2D1::Point2F(x, layout.padding * 2.0f),
+                         D2D1::Point2F(x, static_cast<float>(layout.height) - layout.padding * 2.0f), line.get(),
+                         std::max(1.0f, layout.scale));
+    }
     auto text = SolidBrush(target, style.palette.text);
     target->DrawTextLayout(D2D1::Point2F(layout.detail.left, layout.detail.top), layout.detailText.get(),
                            text.get(), D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT | D2D1_DRAW_TEXT_OPTIONS_CLIP);
@@ -1381,9 +1401,16 @@ private:
         if (fy < 0.0f || fx < layout_.padding || fx > layout_.rowRight) return;
         // Rows are separated by a gap, so the hit test uses the same pitch
         // the rows are drawn with and ignores clicks between rows.
-        const auto row = static_cast<std::size_t>(fy / layout_.rowPitch);
-        if (row >= frame_.rows.size()) return;
+        auto row = static_cast<std::size_t>(fy / layout_.rowPitch);
         if (fy - static_cast<float>(row) * layout_.rowPitch > layout_.rowHeight) return;
+        if (layout_.columnRows > 0 && layout_.columnPitch > 0.0f) {
+            if (row >= layout_.columnRows) return;
+            const float cx = fx - layout_.padding;
+            const auto column = static_cast<std::size_t>(cx / layout_.columnPitch);
+            if (cx - static_cast<float>(column) * layout_.columnPitch > layout_.columnWidth) return;
+            row += column * layout_.columnRows;
+        }
+        if (row >= frame_.rows.size()) return;
         PostMessageW(channel_->notifyHwnd, kMsgSelect, static_cast<WPARAM>(row),
                      static_cast<LPARAM>(frame_.generation));
     }
@@ -1546,6 +1573,13 @@ private:
             return l;
         }
 
+        // Columns carry no numbers, as digits choose from the first page.
+        const bool columns = frame.columnRows > 0 && frame.rows.size() > 0;
+        if (columns) {
+            l.columnRows = frame.columnRows;
+            l.numberWidth = 0.0f;
+            l.numberGap = 0.0f;
+        }
         // Candidate length varies a lot (a single emoji vs. a long phrase), so
         // the panel is sized to the widest visible row. Measured in the
         // selected weight so moving the selection never changes the width.
@@ -1568,9 +1602,21 @@ private:
                                           l.rowPaddingRight);
         }
         const int gutter = l.indicator ? ScaleForWindow(panel_, kIndicatorGutter) : 0;
-        l.width = std::clamp(static_cast<int>(std::ceil(widest + 2.0f * l.padding)) + 1 + gutter,
-                             ScaleForWindow(panel_, kMinWidth), ScaleForWindow(panel_, kMaxWidth));
-        const auto count = static_cast<float>(std::max<std::size_t>(frame.rows.size(), 1));
+        std::size_t rowsDown = frame.rows.size();
+        if (columns) {
+            const std::size_t count = (frame.rows.size() + l.columnRows - 1) / l.columnRows;
+            rowsDown = std::min(frame.rows.size(), l.columnRows);
+            l.columnWidth = std::clamp(std::ceil(widest), static_cast<float>(ScaleForWindow(panel_, kColumnMinWidth)),
+                                       static_cast<float>(ScaleForWindow(panel_, kColumnMaxWidth)));
+            l.columnPitch = l.columnWidth + static_cast<float>(ScaleForWindow(panel_, kColumnGap));
+            const float across = static_cast<float>(count) * l.columnPitch - (l.columnPitch - l.columnWidth);
+            l.width = std::max(static_cast<int>(std::ceil(across + 2.0f * l.padding)) + gutter,
+                               ScaleForWindow(panel_, kMinWidth));
+        } else {
+            l.width = std::clamp(static_cast<int>(std::ceil(widest + 2.0f * l.padding)) + 1 + gutter,
+                                 ScaleForWindow(panel_, kMinWidth), ScaleForWindow(panel_, kMaxWidth));
+        }
+        const auto count = static_cast<float>(std::max<std::size_t>(rowsDown, 1));
         l.height = frame.rows.empty()
                        ? static_cast<int>(std::lround(2.0f * l.padding + l.captionHeight))
                        : static_cast<int>(std::lround(2.0f * l.padding + l.captionHeight + count * l.rowHeight +
@@ -1620,9 +1666,32 @@ private:
         if (!text) return;
         const int width = ScaleForWindow(panel_, kDetailWidth);
         l.width += width;
-        l.height = std::max(l.height, static_cast<int>(std::ceil(std::min(textHeight, maxText) + 2.0f * pad)));
-        l.detail = D2D1::RectF(l.listWidth + pad, pad, static_cast<float>(l.width) - pad,
-                               static_cast<float>(l.height) - pad);
+        const float shown = std::min(textHeight, maxText);
+        l.height = std::max(l.height, static_cast<int>(std::ceil(shown + 2.0f * pad)));
+        // The headword on the selected row's baseline, as far down as the
+        // panel lets it.
+        float top = pad;
+        if (frame.selectedRow < frame.rows.size()) {
+            // The first line's metrics (asking for all, as one is too few
+            // for text that wraps).
+            const auto lineOf = [](IDWriteTextLayout* layout) {
+                UINT32 count = 0;
+                if (!layout) return DWRITE_LINE_METRICS{};
+                layout->GetLineMetrics(nullptr, 0, &count);
+                std::vector<DWRITE_LINE_METRICS> lines(count);
+                if (count == 0 || FAILED(layout->GetLineMetrics(lines.data(), count, &count))) return DWRITE_LINE_METRICS{};
+                return lines.front();
+            };
+            winrt::com_ptr<IDWriteTextLayout> sample;
+            dwrite_->CreateTextLayout(L"\x3042", 1, formats_.text.get(), 1000.0f, 1000.0f, sample.put());
+            const auto rowLine = lineOf(sample.get());
+            const auto headLine = lineOf(text.get());
+            const D2D1_RECT_F row = l.RowRect(frame.selectedRow);
+            const float baseline = row.top + (l.rowHeight - rowLine.height) / 2.0f + rowLine.baseline;
+            top = std::round(baseline - headLine.baseline);
+            top = std::clamp(top, pad, static_cast<float>(l.height) - pad - shown);
+        }
+        l.detail = D2D1::RectF(l.listWidth + pad, top, static_cast<float>(l.width) - pad, top + shown);
         l.detailText = std::move(text);
     }
 
@@ -2374,7 +2443,8 @@ void CandidateWindow::Show(const RECT& caretRect,
                            std::size_t pageStart,
                            std::size_t visibleCount,
                            const CandidateDetail& detail,
-                           const std::wstring& caption) {
+                           const std::wstring& caption,
+                           std::size_t columnRows) {
     if (!channel_) {
         return;
     }
@@ -2438,13 +2508,14 @@ void CandidateWindow::Show(const RECT& caretRect,
     frame.zoom = zoom_;
     frame.rainbow = rainbow_;
     frame.totalCount = candidates_.size();
+    frame.columnRows = columnRows;
     frame.rows.reserve(visibleCount_);
     for (std::size_t row = 0; row < visibleCount_; ++row) {
         const auto index = pageStart_ + row;
         const auto& candidate = candidates_[index];
         const auto displayId = candidate.id == 0 ? index + 1 : candidate.id;
-        frame.rows.push_back({std::to_wstring(displayId), candidate.text, LabelText(candidate, japanese_), candidate.hasMeaning,
-                              candidate.groupStart && row > 0});
+        frame.rows.push_back({columnRows > 0 ? std::wstring{} : std::to_wstring(displayId), candidate.text,
+                              LabelText(candidate, japanese_), candidate.hasMeaning, candidate.groupStart && row > 0});
     }
     if (selectedIndex_ >= pageStart_ && selectedIndex_ - pageStart_ < visibleCount_) {
         frame.selectedRow = selectedIndex_ - pageStart_;

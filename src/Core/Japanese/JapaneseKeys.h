@@ -83,6 +83,7 @@ struct KeyCommand {
         Reconvert,          // Henkan with nothing typed: the selected text, converted again
         ShowCandidates,     // Tab while typing: converted, with the candidate list open
         CommitToFocus,      // Shift+Enter: the phrases up to the focused one
+        Nothing,            // a key the list takes with nothing to do (a digit in its columns)
     };
     Action action{Action::Commit};
     wchar_t character{0};
@@ -97,7 +98,8 @@ struct KeyCommand {
 struct KeyOptions {
     // Space outside a composition types a full-width space (Shift the other).
     bool fullWidthSpace{true};
-    // Rows of the candidate list a page shows (1-9 choose from it).
+    // Rows of the candidate list's first page (1-9 choose from it); the
+    // pages after it are kListColumns columns of as many rows.
     std::size_t pageSize{9};
     // Shift+Enter commits up to the focused phrase (CommitToFocus).
     bool shiftEnterToFocus{false};
@@ -144,7 +146,20 @@ struct CandidateList {
     // The page shown: `count` rows from `pageStart`.
     std::size_t pageStart{0};
     std::size_t count{0};
+    // The pages after the first: columns of this many rows, down then
+    // across (0 on the first page, a single column).
+    std::size_t columnRows{0};
 };
+
+// The list's pages: the first, `pageSize` in one column; then pages of
+// kListColumns columns of `pageSize`, down each column then across.
+inline constexpr std::size_t kListColumns = 3;
+struct ListPage {
+    std::size_t start{0};
+    std::size_t count{0};
+    bool columns{false};
+};
+[[nodiscard]] ListPage ListPageOf(std::size_t index, std::size_t size, std::size_t pageSize) noexcept;
 
 [[nodiscard]] CandidateList CandidateListFor(const JapaneseComposer& composer, std::size_t pageSize);
 

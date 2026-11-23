@@ -629,6 +629,70 @@ void TestComposerConversion(const RomajiTable& table, const MiniPack& pack) {
     Require(!composer.IsConverted(), "typing after a conversion starts typing again");
 }
 
+// The list's pages: the first in one column, numbered; the pages after it
+// in columns, down then across, with the keys going by them.
+void TestListColumns(const RomajiTable& table, const MiniPack& pack) {
+    using tekito::japanese::KeyPress;
+    using tekito::japanese::ListPageOf;
+    using Key = KeyPress::Key;
+    const auto first = ListPageOf(3, 50, 12);
+    Require(first.start == 0 && first.count == 12 && !first.columns, "the first page: twelve in one column");
+    const auto second = ListPageOf(12, 50, 12);
+    Require(second.start == 12 && second.count == 36 && second.columns, "the second: three columns of twelve");
+    const auto third = ListPageOf(48, 50, 12);
+    Require(third.start == 48 && third.count == 2 && third.columns, "the third: what is left");
+
+    const tekito::japanese::JapaneseConverter converter(pack.dictionary, pack.matrix);
+    JapaneseComposer composer(&table);
+    composer.SetConverter(&converter);
+    tekito::japanese::KeyOptions options;
+    options.pageSize = 2;
+    const auto press = [](Key key, bool shift = false) {
+        KeyPress p;
+        p.key = key;
+        p.shift = shift;
+        return p;
+    };
+    const auto hit = [&](const KeyPress& key) {
+        const auto command = tekito::japanese::TranslateKey(composer, key, options);
+        if (!command) return false;
+        (void)tekito::japanese::ApplyKey(composer, *command);
+        return true;
+    };
+    for (const wchar_t key : std::wstring_view(L"nakano")) {
+        KeyPress p;
+        p.key = Key::Character;
+        p.character = key;
+        hit(p);
+    }
+    hit(press(Key::Space));
+    hit(press(Key::Space));
+    const auto* candidates = composer.FocusedCandidates();
+    Require(composer.IsCandidateListOpen() && candidates && candidates->size() >= 5, "なかの has a long list");
+    const std::size_t size = candidates->size();
+    Require(hit(press(Key::Tab)) && composer.FocusedSelection() == 2, "Tab goes into the columns");
+    auto list = tekito::japanese::CandidateListFor(composer, options.pageSize);
+    Require(list.pageStart == 2 && list.columnRows == 2 && list.count == std::min<std::size_t>(6, size - 2) &&
+                list.rows[2].number == 0 && list.rows[0].number == 1,
+            "the columns unnumbered, the first page numbered");
+    Require(hit(press(Key::Right)) && composer.FocusedSelection() == 4, "Right goes a column across");
+    Require(hit(press(Key::Left)) && composer.FocusedSelection() == 2, "Left a column back");
+    Require(hit(press(Key::Left)) && composer.FocusedSelection() == 0, "and from the first column, the first page");
+    KeyPress digit;
+    digit.key = Key::Character;
+    digit.character = L'2';
+    digit.digit = 2;
+    Require(hit(press(Key::Tab)) && composer.FocusedSelection() == 2, "Tab again");
+    Require(hit(press(Key::Tab, true)) && composer.FocusedSelection() == 0, "Shift+Tab back to the top");
+    Require(hit(press(Key::PageDown)) && composer.FocusedSelection() == 2, "PageDown: the columns");
+    Require(hit(press(Key::PageUp)) && composer.FocusedSelection() == 0, "PageUp: the first page");
+    Require(hit(press(Key::Down)) && hit(press(Key::Down)) && composer.FocusedSelection() == 2,
+            "Down from the first page's last row goes on into the columns");
+    Require(hit(digit) && composer.IsCandidateListOpen() && composer.FocusedSelection() == 2,
+            "a digit in the columns stays with the list");
+    Require(hit(press(Key::Up)) && composer.FocusedSelection() == 1, "Up from the columns' top: the first page");
+}
+
 // What each key does in Japanese mode (JapaneseKeys.h), as the text service
 // and the testbed carry it out.
 void TestKeys(const RomajiTable& table, const MiniPack& pack) {
@@ -3058,6 +3122,7 @@ int main(int argc, char** argv) {
     TestConversion(*pack);
     TestComposerConversion(*table, *pack);
     TestKeys(*table, *pack);
+    TestListColumns(*table, *pack);
     TestLiveConversion(*table, *pack);
     TestAddresses(*table, *pack);
     TestCapitals(*table, *pack);
