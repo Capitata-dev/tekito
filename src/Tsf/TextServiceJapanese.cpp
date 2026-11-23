@@ -953,7 +953,7 @@ void TextService::ShowJapaneseCandidates(ITfContext* context, TfEditCookie editC
     candidateWindow_.SetRainbow(userSettings_.rainbowAccent);
     candidateWindow_.SetJapanese(userdata::UseJapaneseUi(userSettings_.uiLanguage));
     candidateWindow_.Show(anchor, rows, selected ? *selected : CandidateWindow::kNoSelection, list.pageStart,
-                          list.count, detail, caption, list.columnRows);
+                          list.count, detail, caption, list.columnRows, list.page, list.pages);
 }
 
 HRESULT TextService::CommitJapanese(ITfContext* context, TfEditCookie editCookie) {

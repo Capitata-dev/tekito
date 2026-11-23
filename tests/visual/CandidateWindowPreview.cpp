@@ -496,8 +496,13 @@ int wmain(int argc, wchar_t** argv) {
         // "#columns N": the page after the first, N columns of "#rows".
         const std::size_t pageRows = list.columns > 0 ? list.rows * list.columns : list.rows;
         const std::size_t rows = std::min(pageRows, list.candidates.size() - list.pageStart);
+        // Pages as the Japanese list has them: the first, then three columns each.
+        const std::size_t grid = 3 * std::max<std::size_t>(list.rows, 1);
+        const std::size_t size = list.candidates.size();
+        const std::size_t pages = size <= list.rows ? 1 : 1 + (size - list.rows + grid - 1) / grid;
+        const std::size_t pageIndex = list.pageStart == 0 ? 0 : 1 + (list.pageStart - list.rows) / grid;
         window.Show(caret, list.candidates, list.selected, list.pageStart, rows, list.detail, caption,
-                    list.columns > 0 ? list.rows : 0);
+                    list.columns > 0 ? list.rows : 0, pageIndex, pages);
     } else if (page) {
         window.Show(caret, candidates, 0, 0, 12, detail, caption);
     } else {

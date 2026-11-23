@@ -78,9 +78,6 @@ constexpr int kTagGap = 10;
 constexpr int kTagPaddingX = 7;
 constexpr int kTagHeight = 16;
 constexpr float kTagTracking = 0.6f;
-constexpr int kIndicatorGutter = 8;
-constexpr int kIndicatorWidth = 3;
-constexpr int kIndicatorInset = 14;
 constexpr int kMinWidth = 200;
 constexpr int kMaxWidth = 440;
 // The pages after the first: columns of a fixed width each, as wide as the
@@ -140,6 +137,8 @@ constexpr float kFontDetail = 12.5f;
 // The keys typed, small above the list (UserSettings::showTypedKeys).
 constexpr float kFontCaption = 12.0f;
 constexpr int kCaptionHeight = 20;
+// The page shown of how many ("1 / 3"), small under the rows.
+constexpr int kFooterHeight = 20;
 // The dictionary sign on rows with a meaning: the open book ("ReadingMode")
 // of the Windows icon font, which reads as a book even this small.
 constexpr float kFontIcon = 13.0f;
@@ -366,6 +365,9 @@ struct Frame {
     std::size_t totalCount{0};
     // Columns of this many rows, down then across (0: one column).
     std::size_t columnRows{0};
+    // The page shown (from 0) of how many (0 or 1: no page line).
+    std::size_t page{0};
+    std::size_t pages{0};
     std::uint64_t generation{0};
     int style{0};  // CandidateWindow::Style
     int zoom{100};  // CandidateWindow::SetZoom, percent
@@ -479,7 +481,7 @@ Style ReadStyle(bool compositionGlass, bool simple) {
         p.rim = SystemColor(COLOR_WINDOWTEXT);
         p.rimLight = {1.0f, 0.0f, 0.0f};
         p.rimBottom = 0.0f;
-        p.text = p.mutedText = p.indicator = SystemColor(COLOR_WINDOWTEXT);
+        p.text = p.mutedText = SystemColor(COLOR_WINDOWTEXT);
         p.tagFill = WithAlpha(p.solid, 0.0f);
         p.shadowKey = p.shadowAmbient = 0.0f;
         const auto highlightText = SystemColor(COLOR_HIGHLIGHTTEXT);
@@ -583,6 +585,7 @@ struct TextFormats {
     winrt::com_ptr<IDWriteTextFormat> detail;
     winrt::com_ptr<IDWriteTextFormat> icon;
     winrt::com_ptr<IDWriteTextFormat> caption;
+    winrt::com_ptr<IDWriteTextFormat> page;
     // How far down the numbers go to share the candidates' baseline.
     float numberShift{0.0f};
 };
@@ -611,9 +614,8 @@ struct Layout {
     float listHeight{0.0f};
     D2D1_RECT_F detail{};
     winrt::com_ptr<IDWriteTextLayout> detailText;
-    bool indicator{false};
-    float indicatorWidth{0.0f};
-    float indicatorInset{0.0f};
+    // The page line under the rows (0: none).
+    float footerHeight{0.0f};
     // The caption's line above the rows (0: none).
     float captionHeight{0.0f};
     // Columns: rows in each, a column's width and its pitch (0: one column).
@@ -1015,36 +1017,19 @@ void DrawRows(ID2D1RenderTarget* target, IDWriteFactory* factory, const TextForm
     }
 }
 
-// Page position: a thin scroll-indicator capsule along the right edge, shown
-// only when there are more candidates than fit on the page.
-void DrawIndicator(ID2D1RenderTarget* target, const Layout& layout, const Frame& frame,
-                   const Style& style) {
-    if (!layout.indicator || frame.totalCount <= frame.rows.size()) return;
-    const float center = (layout.rowRight + layout.listWidth) / 2.0f;
-    const float half = layout.indicatorWidth / 2.0f;
-    const float top = layout.indicatorInset;
-    const float bottom = layout.listHeight - layout.indicatorInset;
-    const float length = bottom - top;
-    if (length <= 0.0f) return;
-
-    auto track = SolidBrush(target, style.palette.tagFill);
-    target->FillRoundedRectangle(Rounded(D2D1::RectF(center - half, top, center + half, bottom), half),
-                                 track.get());
-
-    const float total = static_cast<float>(frame.totalCount);
-    const float shown = static_cast<float>(frame.rows.size());
-    const float thumbLength = std::max(length * shown / total, layout.indicatorWidth * 4.0f);
-    const float travel = std::max(total - shown, 1.0f);
-    const float thumbTop =
-        top + (length - thumbLength) * std::min(static_cast<float>(frame.firstIndex) / travel, 1.0f);
-    auto thumb = SolidBrush(target, style.palette.indicator);
-    target->FillRoundedRectangle(
-        Rounded(D2D1::RectF(center - half, thumbTop, center + half, thumbTop + thumbLength), half),
-        thumb.get());
+// The page shown of how many, small and muted under the rows at their end.
+void DrawPage(ID2D1RenderTarget* target, const TextFormats& formats, const Layout& layout, const Frame& frame,
+              const Style& style) {
+    if (layout.footerHeight <= 0.0f || frame.pages < 2 || !formats.page) return;
+    const std::wstring text = std::to_wstring(frame.page + 1) + L" / " + std::to_wstring(frame.pages);
+    auto muted = SolidBrush(target, style.palette.mutedText);
+    const float bottom = layout.listHeight - layout.padding;
+    const D2D1_RECT_F rect = D2D1::RectF(layout.padding + layout.rowPaddingLeft, bottom - layout.footerHeight,
+                                         layout.rowRight - layout.rowPaddingRight, bottom);
+    target->DrawText(text.c_str(), static_cast<UINT32>(text.size()), formats.page.get(), rect, muted.get(),
+                     D2D1_DRAW_TEXT_OPTIONS_NONE);
 }
 
-// The meaning pane: a hairline between it and the list, then the headword
-// and its senses.
 constexpr int kBadgeAuto = 1;
 constexpr int kBadgeDirect = 2;
 constexpr int kBadgeJapanese = 3;
@@ -1610,13 +1595,13 @@ private:
         l.tagTracking = kTagTracking * l.scale;
         l.iconWidth = static_cast<float>(ScaleForWindow(panel_, kIconWidth));
         l.iconGap = static_cast<float>(ScaleForWindow(panel_, kIconGap));
-        l.indicator = frame.totalCount > frame.rows.size();
-        l.indicatorWidth = static_cast<float>(ScaleForWindow(panel_, kIndicatorWidth));
-        l.indicatorInset = static_cast<float>(ScaleForWindow(panel_, kIndicatorInset));
+        if (frame.pages > 1 && !frame.rows.empty() && formats_.page) {
+            l.footerHeight = static_cast<float>(ScaleForWindow(panel_, kFooterHeight));
+        }
         if (frame.badge) {
             const int side = static_cast<int>(std::lround(2.0f * l.padding + l.rowHeight));
             l.width = l.height = side;
-            l.indicator = false;
+            l.footerHeight = 0.0f;
             if (composition_ && frame.style != 1) l.radius = static_cast<float>(side) / 2.0f;
             l.rowRight = static_cast<float>(side) - l.padding;
             l.listWidth = l.listHeight = static_cast<float>(side);
@@ -1651,7 +1636,7 @@ private:
             widest = std::max(widest, l.rowPaddingLeft + MeasureTextWidth(dwrite_.get(), formats_.caption.get(), frame.caption) +
                                           l.rowPaddingRight);
         }
-        const int gutter = l.indicator ? ScaleForWindow(panel_, kIndicatorGutter) : 0;
+        const int gutter = 0;
         std::size_t rowsDown = frame.rows.size();
         if (columns) {
             const std::size_t count = (frame.rows.size() + l.columnRows - 1) / l.columnRows;
@@ -1670,7 +1655,7 @@ private:
         l.height = frame.rows.empty()
                        ? static_cast<int>(std::lround(2.0f * l.padding + l.captionHeight))
                        : static_cast<int>(std::lround(2.0f * l.padding + l.captionHeight + count * l.rowHeight +
-                                                      (count - 1.0f) * (l.rowPitch - l.rowHeight)));
+                                                      (count - 1.0f) * (l.rowPitch - l.rowHeight) + l.footerHeight));
         l.rowRight = static_cast<float>(l.width) - l.padding - static_cast<float>(gutter);
         l.listWidth = static_cast<float>(l.width);
         l.listHeight = static_cast<float>(l.height);
@@ -1801,6 +1786,8 @@ private:
         }
         formats_.tag = CreateFormat(f, brand, kFontTag * scale, DWRITE_FONT_WEIGHT_BOLD,
                                     DWRITE_TEXT_ALIGNMENT_LEADING, false);
+        formats_.page = CreateFormat(f, brand, kFontCaption * scale, DWRITE_FONT_WEIGHT_NORMAL,
+                                     DWRITE_TEXT_ALIGNMENT_TRAILING, true);
         formats_.caption = CreateFormat(f, brand, kFontCaption * scale, DWRITE_FONT_WEIGHT_NORMAL,
                                         DWRITE_TEXT_ALIGNMENT_LEADING, true);
         formats_.detail = CreateFormat(f, brand, kFontDetail * scale, DWRITE_FONT_WEIGHT_NORMAL,
@@ -2014,7 +2001,7 @@ private:
     // root
     //  +- glass       backdrop blur (or solid color), clipped to the panel shape
     //  +- chrome      veil, inner glow, specular rim
-    //  +- content     rows in normal ink, page indicator
+    //  +- content     rows in normal ink, the page line
     //  +- selection   moves between rows (implicitly animated)
     //      +- capsule    tinted glass pill with its lift shadow
     //      +- window     clipped to the pill
@@ -2255,7 +2242,7 @@ private:
             }
             DrawCaption(dc, formats_, layout_, frame_, style_);
             DrawRows(dc, dwrite_.get(), formats_, layout_, frame_, style_, Ink::Normal, kNoRow, kNoRow);
-            DrawIndicator(dc, layout_, frame_, style_);
+            DrawPage(dc, formats_, layout_, frame_, style_);
         });
         if (FAILED(hr)) return hr;
 
@@ -2491,7 +2478,7 @@ private:
                 DrawRows(target, dwrite_.get(), formats_, layout_, frame_, style_, Ink::Selected, selected,
                          kNoRow);
             }
-            DrawIndicator(target, layout_, frame_, style_);
+            DrawPage(target, formats_, layout_, frame_, style_);
             if (frame_.badge) DrawBadge(target, layout_, frame_.badge, channel_->instance);
             if (target->EndDraw() == D2DERR_RECREATE_TARGET) hwndTarget_ = nullptr;
         }
@@ -2676,7 +2663,9 @@ void CandidateWindow::Show(const RECT& caretRect,
                            std::size_t visibleCount,
                            const CandidateDetail& detail,
                            const std::wstring& caption,
-                           std::size_t columnRows) {
+                           std::size_t columnRows,
+                           std::size_t page,
+                           std::size_t pages) {
     if (!channel_) {
         return;
     }
@@ -2741,6 +2730,8 @@ void CandidateWindow::Show(const RECT& caretRect,
     frame.rainbow = rainbow_;
     frame.totalCount = candidates_.size();
     frame.columnRows = columnRows;
+    frame.page = page;
+    frame.pages = pages;
     frame.rows.reserve(visibleCount_);
     for (std::size_t row = 0; row < visibleCount_; ++row) {
         const auto index = pageStart_ + row;

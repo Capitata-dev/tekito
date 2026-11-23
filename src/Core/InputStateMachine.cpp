@@ -372,6 +372,12 @@ void InputStateMachine::UpdatePageForSelection(bool resetOnLoop) noexcept {
     visibleCount_ = std::min<std::size_t>(page_, count - pageStart_);
 }
 
+std::size_t InputStateMachine::PageCount() const noexcept {
+    const auto count = candidates_.size();
+    if (count <= firstPage_ || page_ == 0) return 1;
+    return (count + page_ - 1) / page_;
+}
+
 void InputStateMachine::SetPageSizes(std::size_t first, std::size_t paged) noexcept {
     firstPage_ = std::max<std::size_t>(1, first);
     page_ = std::max(firstPage_, paged);

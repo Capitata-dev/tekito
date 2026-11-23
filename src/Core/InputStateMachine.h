@@ -48,6 +48,10 @@ public:
     // Rows the list shows at first, and once the user pages through it
     // (UserSettings::candidateRows).
     void SetPageSizes(std::size_t first, std::size_t paged) noexcept;
+    // The page shown (from 0) and how many there are, in pages of the
+    // paged size.
+    [[nodiscard]] std::size_t PageIndex() const noexcept { return page_ == 0 ? 0 : pageStart_ / page_; }
+    [[nodiscard]] std::size_t PageCount() const noexcept;
     // Space right after the Space that ended a word puts a period there
     // instead of going to the next candidate (Tab still does).
     void SetDoubleSpacePeriod(bool enabled) noexcept { doubleSpacePeriod_ = enabled; }

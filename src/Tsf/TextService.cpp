@@ -1786,7 +1786,8 @@ HRESULT TextService::HandleKeyInEditSessionCore(ITfContext* context, TfEditCooki
         if (!EqualRect(&anchor, &candidateAnchor_)) {
             candidateAnchor_ = anchor;
             candidateWindow_.Show(anchor, EnglishRows(), state_.SelectedIndex(), state_.PageStart(),
-                                  state_.VisibleCount(), SelectedEnglishMeaning());
+                                  state_.VisibleCount(), SelectedEnglishMeaning(), {}, 0, state_.PageIndex(),
+                                  state_.PageCount());
         }
         return S_OK;
     }
@@ -2543,7 +2544,7 @@ void TextService::ShowCandidates(ITfContext* context, TfEditCookie editCookie) {
     candidateWindow_.SetRainbow(userSettings_.rainbowAccent);
     candidateWindow_.SetJapanese(userdata::UseJapaneseUi(userSettings_.uiLanguage));
     candidateWindow_.Show(anchor, EnglishRows(), state_.SelectedIndex(), state_.PageStart(), state_.VisibleCount(),
-                          SelectedEnglishMeaning());
+                          SelectedEnglishMeaning(), {}, 0, state_.PageIndex(), state_.PageCount());
     // Not where nothing is learned (secret mode, a private window, learning off).
     const bool secret = runtimeMode_ && runtimeMode_->Secret();
     const bool keepsNothing = !userSettings_.learningEnabled || secret ||

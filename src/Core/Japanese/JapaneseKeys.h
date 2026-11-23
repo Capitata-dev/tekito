@@ -149,6 +149,9 @@ struct CandidateList {
     // The pages after the first: columns of this many rows, down then
     // across (0 on the first page, a single column).
     std::size_t columnRows{0};
+    // The page shown (from 0) and how many there are (0: not paged).
+    std::size_t page{0};
+    std::size_t pages{0};
 };
 
 // The list's pages: the first, `pageSize` in one column; then pages of
@@ -158,6 +161,9 @@ struct ListPage {
     std::size_t start{0};
     std::size_t count{0};
     bool columns{false};
+    // Which page (from 0) of how many.
+    std::size_t index{0};
+    std::size_t pages{1};
 };
 [[nodiscard]] ListPage ListPageOf(std::size_t index, std::size_t size, std::size_t pageSize) noexcept;
 

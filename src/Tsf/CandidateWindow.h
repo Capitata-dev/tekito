@@ -50,7 +50,9 @@ public:
               std::size_t visibleCount,
               const CandidateDetail& detail = {},
               const std::wstring& caption = {},
-              std::size_t columnRows = 0);
+              std::size_t columnRows = 0,
+              std::size_t page = 0,
+              std::size_t pages = 0);
     void Hide() noexcept;
     // The mode's icon alone, in the list's style, under the caret for a
     // moment after the user switches modes; it fades by itself. The next

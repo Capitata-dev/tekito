@@ -366,10 +366,12 @@ KeyOutcome ApplyKey(JapaneseComposer& composer, const KeyCommand& command) {
 
 ListPage ListPageOf(std::size_t index, std::size_t size, std::size_t pageSize) noexcept {
     pageSize = std::max<std::size_t>(pageSize, 1);
-    if (index < pageSize || size <= pageSize) return {0, std::min(pageSize, size), false};
     const std::size_t grid = kListColumns * pageSize;
-    const std::size_t start = pageSize + (index - pageSize) / grid * grid;
-    return {start, std::min(grid, size - start), true};
+    const std::size_t pages = size <= pageSize ? 1 : 1 + (size - pageSize + grid - 1) / grid;
+    if (index < pageSize || size <= pageSize) return {0, std::min(pageSize, size), false, 0, pages};
+    const std::size_t page = (index - pageSize) / grid;
+    const std::size_t start = pageSize + page * grid;
+    return {start, std::min(grid, size - start), true, page + 1, pages};
 }
 
 CandidateList CandidateListFor(const JapaneseComposer& composer, std::size_t pageSize) {
@@ -403,6 +405,8 @@ CandidateList CandidateListFor(const JapaneseComposer& composer, std::size_t pag
     list.pageStart = page.start;
     list.count = page.count;
     list.columnRows = page.columns ? pageSize : 0;
+    list.page = page.index;
+    list.pages = page.pages;
     return list;
 }
 
