@@ -1,5 +1,7 @@
 #include "apps/tekito-settings/Companion.h"
 
+#include "apps/tekito-settings/CompanionBubble.h"
+
 #include "apps/tekito-settings/CompanionShapes.h"
 #include "UserData/RuntimeModeState.h"
 #include "UserData/UiLanguage.h"
@@ -299,11 +301,21 @@ public:
         hwnd_ = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, kWindowClass,
                                 L"TEKITO", WS_POPUP, at.x, at.y, 1, 1, nullptr, nullptr, instance, this);
         if (!hwnd_) return false;
+        (void)bubble_.Create(instance);
         Resize(GetDpiForWindow(hwnd_));
         if (!KeepOnScreen(saved_)) MoveTo(DefaultPlace());
         motion_ = AnimationsEnabled();
         Check();
         SetTimer(hwnd_, kCheckTimer, kCheckMilliseconds, nullptr);
+#ifndef NDEBUG
+        // TEKITO_COMPANION_SAY=<title>|<body>: a note beside it at first.
+        std::wstring say(256, L'\0');
+        say.resize(GetEnvironmentVariableW(L"TEKITO_COMPANION_SAY", say.data(), static_cast<DWORD>(say.size())));
+        if (!say.empty()) {
+            const auto bar = say.find(L'|');
+            Say(say.substr(0, bar), bar == std::wstring::npos ? std::wstring{} : say.substr(bar + 1), 60.0);
+        }
+#endif
         return true;
     }
 
@@ -345,6 +357,7 @@ private:
                 GetCursorPos(&now);
                 if (!dragging_ && (std::abs(now.x - pressedAt_.x) > kDragSlop || std::abs(now.y - pressedAt_.y) > kDragSlop)) {
                     dragging_ = true;
+                    bubble_.Hide();
                 }
                 if (dragging_) MoveTo({pressedPlace_.x + now.x - pressedAt_.x, pressedPlace_.y + now.y - pressedAt_.y});
             }
@@ -731,6 +744,33 @@ private:
             Cheer();
         }
         UpdateShown();
+        CheckCapsLock();
+    }
+
+    // Caps Lock turned on: said beside it, where letters come out in
+    // capitals (not in Japanese mode typing kana whatever Caps Lock is).
+    void CheckCapsLock() {
+        const bool on = (GetKeyState(VK_CAPITAL) & 1) != 0;
+        if (on == capsLock_) return;
+        const bool first = !capsKnown_;
+        capsLock_ = on;
+        capsKnown_ = true;
+        if (!on) {
+            bubble_.Hide();
+            return;
+        }
+        if (first || (shown_ == Shown::Japanese && settings_.japaneseIgnoreCapsLock)) return;
+        const bool japanese = tekito::userdata::UseJapaneseUi(settings_.uiLanguage);
+        Say(japanese ? L"Caps Lock がオンです" : L"Caps Lock is on",
+            japanese ? L"英字が大文字で入力されます" : L"Letters are typed in capitals");
+    }
+
+    // A note beside it for a few seconds.
+    void Say(const std::wstring& title, const std::wstring& body, double seconds = 4.0) {
+        if (hidden_) return;
+        RECT anchor{};
+        GetWindowRect(hwnd_, &anchor);
+        bubble_.Show(title, body, anchor, GetDpiForWindow(hwnd_), seconds);
     }
 
     // The mode of the keyboard the app in front types with: TEKITO's
@@ -933,6 +973,9 @@ private:
     bool dragging_{false};
     POINT pressedAt_{};
     POINT pressedPlace_{};
+    tekito::companion::Bubble bubble_;
+    bool capsLock_{false};
+    bool capsKnown_{false};
 };
 
 }  // namespace
