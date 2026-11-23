@@ -209,8 +209,9 @@ change, and **More settings** at its end holds the rest; **All settings**
 shows every setting on one page.
 
 Your dictionary and what TEKITO learns can be encrypted under
-**Settings → Dictionary & learning**, with a recovery code. Home's companion
-can also sit in a corner of the desktop (**Settings → General**). Settings,
+**Settings → Dictionary & learning**, with a recovery code. Rubi, Home's companion,
+can also sit in a corner of the desktop, showing the mode in its color and
+what a word dropped on it reads and means (**Settings → General**). Settings,
 the setup program and TEKITO's messages are in English and Japanese.
 
 ## Privacy

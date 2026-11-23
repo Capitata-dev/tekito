@@ -4,8 +4,8 @@
 
 #include <optional>
 
-// The desktop companion (Settings > General > Desktop companion, off at
-// first): Home's companion in a corner of the desktop, run as
+// The desktop companion, Rubi (ルビ: the reading written over kanji; Settings
+// > General, off at first): Home's companion in a corner of the desktop, run as
 // "TEKITO.exe --companion" and started with Windows while it is on. It is
 // colored as the mode of the keyboard in front (a click goes to the next
 // mode), says when Caps Lock turns on, tells what a word dropped on it (or

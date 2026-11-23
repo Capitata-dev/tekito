@@ -998,7 +998,7 @@ private:
         AppendMenuW(menu, MF_STRING, kMenuReport, japanese ? L"誤変換を報告する" : L"Report a wrong conversion");
         AppendMenuW(menu, MF_STRING, kMenuSettings, japanese ? L"設定を開く" : L"Open Settings");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(menu, MF_STRING, kMenuHide, japanese ? L"コンパニオンを非表示にする" : L"Hide the companion");
+        AppendMenuW(menu, MF_STRING, kMenuHide, japanese ? L"ルビを非表示にする" : L"Hide Rubi");
         POINT at;
         GetCursorPos(&at);
         SetForegroundWindow(hwnd_);
