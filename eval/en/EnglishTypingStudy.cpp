@@ -476,7 +476,10 @@ int RunEnglishStudy(const EnglishStudyOptions& options) {
         for (const auto& word : Words(sentence)) {
             const auto candidates = engine->Convert(RequestFor(sentence, word, word.text)).candidates;
             std::cout << Narrow(word.text) << " -> " << Narrow(AfterSpace(state, word.text, candidates)) << " |";
-            for (std::size_t i = 0; i < candidates.size() && i < 4; ++i) {
+            // TEKITO_PROBE_ROWS=<n>: show n candidates instead of 4.
+            const char* rowsText = std::getenv("TEKITO_PROBE_ROWS");
+            const std::size_t rows = rowsText ? static_cast<std::size_t>(std::atoi(rowsText)) : 4u;
+            for (std::size_t i = 0; i < candidates.size() && i < rows; ++i) {
                 const auto& c = candidates[i];
                 std::cout << "  [" << Narrow(c.text) << " score=" << c.score << " label=" << static_cast<int>(c.label)
                           << " orig=" << c.isOriginal << " policy=0x" << std::hex << c.policyFlags

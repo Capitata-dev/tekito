@@ -631,21 +631,44 @@ std::vector<Candidate> CandidateGenerator::Generate(std::wstring_view rawText,
         for (const auto& candidate : output) seen.insert(candidate.text);
     }
 
+    // Words that start with what was typed: the most common of the first
+    // ones the lexicon gives (in spelling order), nine at most.
     const auto addCompletions = [&]() {
-        lexiconProvider_.Find({LexiconQuery::Kind::Prefix, rawText, 9}, [&](const auto& entry) {
+        constexpr std::size_t kCompletionPool = 128;
+        constexpr std::size_t kCompletions = 9;
+        struct Completion {
+            std::wstring text;
+            std::uint32_t sourceFlags;
+            std::wstring dictionaryEntryId;
+            double frequency;
+        };
+        std::vector<Completion> found;
+        lexiconProvider_.Find({LexiconQuery::Kind::Prefix, rawText, kCompletionPool}, [&](const auto& entry) {
             const auto comparableRaw = entry.caseSensitive ? std::wstring(entry.raw) : Lower(entry.raw);
             const auto comparableInput = entry.caseSensitive ? std::wstring(rawText) : lower;
             if (!entry.spellcheckWord || !comparableRaw.starts_with(comparableInput) ||
                 comparableRaw.size() <= comparableInput.size()) {
                 return;
             }
-            AddUnique(output, seen, MatchCase(rawText, std::wstring(entry.raw)), SemanticLabel::None, false,
-                      80.0, false, CandidatePolicySuggestOnly,
-                      SourceFlagsFor(entry, SemanticLabel::Original) | CandidateSourceCompletion,
-                      DictionaryEntryIdFor(entry, SemanticLabel::Original));
-            if (!HasOriginal(output)) AddOriginal(output, seen, rawText);
-            if (output.size() >= 9) return;
+            found.push_back({MatchCase(rawText, std::wstring(entry.raw)),
+                             SourceFlagsFor(entry, SemanticLabel::Original) | CandidateSourceCompletion,
+                             DictionaryEntryIdFor(entry, SemanticLabel::Original),
+                             frequencyProvider_.Score(entry.raw)});
         });
+        std::stable_sort(found.begin(), found.end(), [](const Completion& left, const Completion& right) {
+            return left.frequency > right.frequency;
+        });
+        std::size_t added = 0;
+        for (auto& completion : found) {
+            if (added >= kCompletions) break;
+            const auto sizeBefore = output.size();
+            AddUnique(output, seen, std::move(completion.text), SemanticLabel::None, false, 80.0, false,
+                      CandidatePolicySuggestOnly, completion.sourceFlags,
+                      std::move(completion.dictionaryEntryId));
+            if (output.size() == sizeBefore) continue;
+            ++added;
+            if (!HasOriginal(output)) AddOriginal(output, seen, rawText);
+        }
     };
 
     if (options.completionEnabled && lower.size() <= 2 && !exact) addCompletions();
