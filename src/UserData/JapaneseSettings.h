@@ -28,7 +28,7 @@ namespace tekito::userdata {
 // Rows a page of the Japanese candidate list shows.
 [[nodiscard]] inline std::size_t JapanesePageSize(const UserSettings& settings) noexcept {
     const auto rows = static_cast<std::size_t>(settings.candidateRows);
-    return rows ? rows : 9;
+    return rows ? rows : 12;
 }
 
 // What keys do that depends on the settings (japanese::TranslateKey).

@@ -4517,11 +4517,11 @@ void JapaneseComposer::AddSlipCandidatesFor(PhraseState& phrase) const {
     if (added.empty()) return;
     // Only the likeliest on the first page, with the words read the same
     // and the emoji; the rest after the first page, not filling it.
-    constexpr std::size_t kFirstPage = 9;
+    const std::size_t firstPage = pageSize_;
     const std::size_t at = SlipPosition(phrase.candidates, likelier);
     phrase.candidates.insert(phrase.candidates.begin() + static_cast<std::ptrdiff_t>(at), std::move(added.front()));
     if (phrase.selected >= at) ++phrase.selected;
-    const std::size_t rest = std::min(phrase.candidates.size(), std::max(at + 1, kFirstPage));
+    const std::size_t rest = std::min(phrase.candidates.size(), std::max(at + 1, firstPage));
     phrase.candidates.insert(phrase.candidates.begin() + static_cast<std::ptrdiff_t>(rest),
                              std::make_move_iterator(added.begin() + 1), std::make_move_iterator(added.end()));
     if (phrase.selected >= rest) phrase.selected += added.size() - 1;

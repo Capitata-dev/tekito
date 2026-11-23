@@ -62,7 +62,7 @@ constexpr UINT kBaseDpi = 96;
 // full pill (radius = half the row height) and the panel corner is that
 // radius plus the padding around the capsule, so the two curves stay
 // parallel the way nested glass shapes do.
-constexpr int kRowHeight = 36;
+constexpr int kRowHeight = 28;
 constexpr int kRowGap = 2;
 constexpr int kPanelPadding = 6;
 constexpr int kCornerRadius = kRowHeight / 2 + kPanelPadding;
@@ -2421,7 +2421,8 @@ void CandidateWindow::Show(const RECT& caretRect,
         const auto index = pageStart_ + row;
         const auto& candidate = candidates_[index];
         const auto displayId = candidate.id == 0 ? index + 1 : candidate.id;
-        frame.rows.push_back({std::to_wstring(displayId), candidate.text, LabelText(candidate, japanese_), candidate.hasMeaning,
+        // Digit keys choose the first nine: no number past them.
+        frame.rows.push_back({displayId <= 9 ? std::to_wstring(displayId) : std::wstring{}, candidate.text, LabelText(candidate, japanese_), candidate.hasMeaning,
                               candidate.groupStart && row > 0});
     }
     if (selectedIndex_ >= pageStart_ && selectedIndex_ - pageStart_ < visibleCount_) {

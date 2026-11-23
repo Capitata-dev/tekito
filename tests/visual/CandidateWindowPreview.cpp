@@ -5,7 +5,7 @@
 // see them.
 //
 //   tekito_candidate_window_preview.exe <out.bmp> [stripes|doc|paper|dusk] [short|long] [glide] [click]
-//                                       [meaning|kanji|kanji-list|chunks]
+//                                       [meaning|kanji|kanji-list|chunks|page]
 //                                       [badge-auto|badge-direct|badge-japanese]
 //
 // `stripes` puts saturated color bands behind the glass to show the blur;
@@ -247,6 +247,18 @@ std::vector<tekito::Candidate> SampleKanjiCandidates() {
     };
 }
 
+// A Japanese list longer than a page (こうえん), shown a page of twelve.
+std::vector<tekito::Candidate> SamplePageCandidates() {
+    using tekito::SemanticLabel;
+    std::vector<tekito::Candidate> candidates;
+    std::uint32_t id = 1;
+    for (const wchar_t* text : {L"公園", L"公演", L"講演", L"🏞️", L"後援", L"好演", L"コーエン", L"口演", L"公苑",
+                                L"口縁", L"後縁", L"香園", L"⛲️", L"高遠"}) {
+        candidates.push_back(MakeCandidate(text, SemanticLabel::None, id++));
+    }
+    return candidates;
+}
+
 // A phrase's list with its chunk candidates first (にじがでる: 虹が, then
 // 虹がでる and 二次が出る over the phrases after it), a line before its own.
 std::vector<tekito::Candidate> SampleChunkCandidates() {
@@ -318,6 +330,7 @@ int wmain(int argc, wchar_t** argv) {
     bool meaning = false;
     bool form = false;
     bool kanji = false;
+    bool page = false;
     bool chunks = false;
     int badge = 0;
     // The keys typed shown above the list, or alone.
@@ -333,6 +346,8 @@ int wmain(int argc, wchar_t** argv) {
         if (wcscmp(argv[i], L"form") == 0) meaning = form = true;
         if (wcscmp(argv[i], L"kanji") == 0) kanji = meaning = true;
         if (wcscmp(argv[i], L"kanji-list") == 0) kanji = true;
+        // A page of twelve Japanese candidates, as Japanese mode shows.
+        if (wcscmp(argv[i], L"page") == 0) page = true;
         if (wcscmp(argv[i], L"chunks") == 0) chunks = true;
         if (wcscmp(argv[i], L"doc") == 0) g_documentBackdrop = true;
         if (wcscmp(argv[i], L"dusk") == 0) g_duskBackdrop = true;
@@ -380,7 +395,7 @@ int wmain(int argc, wchar_t** argv) {
     wchar_t language[8]{};
     const bool japaneseUi = GetEnvironmentVariableW(L"TEKITO_PREVIEW_LANGUAGE", language, 8) > 0 && wcscmp(language, L"ja") == 0;
     if (japaneseUi) window.SetJapanese(true);
-    auto candidates = chunks ? SampleChunkCandidates() : kanji ? SampleKanjiCandidates() : SampleCandidates(longList);
+    auto candidates = page ? SamplePageCandidates() : chunks ? SampleChunkCandidates() : kanji ? SampleKanjiCandidates() : SampleCandidates(longList);
     if (meaning) {
         // Rows with a meaning show the dictionary sign.
         for (std::size_t i = 0; i < candidates.size(); ++i) candidates[i].hasMeaning = i != 0 && i != 3;
@@ -405,6 +420,8 @@ int wmain(int argc, wchar_t** argv) {
                                                  : tekito::InputMode::Convert);
     } else if (captionOnly) {
         window.Show(caret, {}, tekito::tsf::CandidateWindow::kNoSelection, 0, 0, {}, caption);
+    } else if (page) {
+        window.Show(caret, candidates, 0, 0, 12, detail, caption);
     } else {
         window.Show(caret, candidates, 1, 0, 5, detail, caption);
     }

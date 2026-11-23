@@ -400,7 +400,7 @@ private:
     // user's words).
     std::shared_ptr<const japanese::PostalCodes> postalCodes_;
     // Candidates per page of the Japanese list (UserSettings::candidateRows).
-    std::size_t japanesePage_{9};
+    std::size_t japanesePage_{12};
     RECT candidateAnchor_{};
     CandidateWindow candidateWindow_;
     CatSounds catSounds_;

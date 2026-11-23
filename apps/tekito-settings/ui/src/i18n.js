@@ -131,7 +131,7 @@ const en = {
     candidates: "Candidate list",
     styles: { glass: "Glass", simple: "Simple" },
     rows: {
-      title: "Candidates per page", description: "Automatic shows 5 in English and 9 in Japanese.", automatic: "Automatic", other: "Other",
+      title: "Candidates per page", description: "Automatic shows 5 in English and 12 in Japanese.", automatic: "Automatic", other: "Other",
       unit: "rows", range: (min, max) => `${min} to ${max}. Number keys choose the first nine.`,
     },
     meanings: { title: "Meanings", description: "Shows what the selected candidate means, beside the list." },
@@ -601,7 +601,7 @@ const ja = {
     candidates: "候補一覧",
     styles: { glass: "ガラス", simple: "シンプル" },
     rows: {
-      title: "1ページの候補数", description: "「自動」では、英語は5件、日本語は9件です", automatic: "自動", other: "その他",
+      title: "1ページの候補数", description: "「自動」では、英語は5件、日本語は12件です", automatic: "自動", other: "その他",
       unit: "件", range: (min, max) => `${min}〜${max}件。数字キーで選べるのは9件目までです`,
     },
     meanings: { title: "語の意味", description: "選択中の候補の意味が、候補一覧の横に表示されます" },

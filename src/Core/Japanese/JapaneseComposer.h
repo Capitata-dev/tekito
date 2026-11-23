@@ -1039,7 +1039,7 @@ private:
     bool dropSpaceBefore_{false};
     const JapaneseUserDictionary* userDictionary_{nullptr};
     const SpecialConversions* special_{nullptr};
-    std::size_t pageSize_{9};
+    std::size_t pageSize_{12};
     const PostalCodes* postalCodes_{nullptr};
     SpecialConversionOptions specialOptions_;
     JapaneseLearningStore* learning_{nullptr};
