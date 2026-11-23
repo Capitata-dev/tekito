@@ -351,11 +351,12 @@ void ExternalLexiconProvider::Find(const LexiconQuery& query, const Visitor& vis
     // Below 3 characters, a 2-delete SymSpell query collides with a very large
     // share of the dictionary (most words reduce to some 0-1 character string
     // within 2 deletions), so the candidate pool it has to verify balloons and
-    // latency with it. The disk-streaming scan below is bounded by same-first-
-    // character prefix instead, which stays cheap at this length, so short
-    // queries keep using it.
-    if (query.kind == LexiconQuery::Kind::Candidate && symSpellIndex_.IsBuilt() && key.size() > 2) {
-        auto matches = symSpellIndex_.Lookup(key, 2);
+    // latency with it; at one edit it stays small. A 2-edit query that short
+    // keeps the disk-streaming scan below, bounded by the first character.
+    if (query.nearSlip && symSpellIndex_.IsBuilt()) return;
+    if (query.kind == LexiconQuery::Kind::Candidate && symSpellIndex_.IsBuilt() &&
+        (key.size() > 2 || query.maxDistance < 2)) {
+        auto matches = symSpellIndex_.Lookup(key, query.maxDistance);
         std::size_t resultCount = 0;
         for (const auto& word : matches) {
             const auto ownedWord = LowerAscii(word);
@@ -391,7 +392,7 @@ void ExternalLexiconProvider::Find(const LexiconQuery& query, const Visitor& vis
             const bool match = query.kind == LexiconQuery::Kind::Exact
                                    ? word == key
                                    : query.kind == LexiconQuery::Kind::Candidate
-                                         ? (!key.empty() && word.front() == key.front() && Near(word, key, 2))
+                                         ? (!key.empty() && word.front() == key.front() && Near(word, key, query.maxDistance))
                                          : StartsWith(word, key);
             if (match) {
                 const auto ownedWord = LowerAscii(token);

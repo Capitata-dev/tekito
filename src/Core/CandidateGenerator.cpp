@@ -684,6 +684,11 @@ std::vector<Candidate> CandidateGenerator::Generate(std::wstring_view rawText,
         });
     }
 
+    // A word of four letters or fewer is a slip of a word one edit away:
+    // two edits from it reach a large share of the lexicon, which only
+    // crowds out the word meant.
+    constexpr std::size_t kShortWord = 4;
+    const std::size_t maxDistance = lower.size() <= kShortWord ? 1u : 2u;
     std::unordered_set<std::wstring> inspected;
     const auto addRankedEntry = [&](const LexiconEntry& entry, bool weakExactRecovery = false) {
         if (!options.correctionEnabled || !entry.spellcheckWord || entry.caseSensitive) return;
@@ -691,7 +696,7 @@ std::vector<Candidate> CandidateGenerator::Generate(std::wstring_view rawText,
         const auto comparableRaw = Lower(entry.raw);
         const auto evidence = typoModel_.Compare(lower, comparableRaw);
         const auto distance = evidence.distance;
-        if (distance > 0 && distance <= 2) {
+        if (distance > 0 && distance <= maxDistance) {
             const auto candidateContextScore = options.contextSuggestionsEnabled
                                                     ? contextScore(entry.raw)
                                                     : 0.0;
@@ -709,16 +714,18 @@ std::vector<Candidate> CandidateGenerator::Generate(std::wstring_view rawText,
     };
     const auto candidateSearchLimit = lower.size() <= 2 ? 4096u : 512u;
     if (exactHasWeakFrequency) {
-        lexiconProvider_.Find({LexiconQuery::Kind::Candidate, lower, candidateSearchLimit},
+        lexiconProvider_.Find({LexiconQuery::Kind::Candidate, lower, candidateSearchLimit, false, maxDistance},
                               [&](const auto& entry) { addRankedEntry(entry, true); });
     } else {
-        lexiconProvider_.Find({LexiconQuery::Kind::Candidate, lower, candidateSearchLimit},
+        lexiconProvider_.Find({LexiconQuery::Kind::Candidate, lower, candidateSearchLimit, false, maxDistance},
                               addRankedEntry);
     }
     for (const auto& prefix : SearchPrefixes(lower)) {
         // Bounded index ranges keep the time per key predictable. Widen this
-        // only after measuring missed candidates on the real packs.
-        lexiconProvider_.Find({LexiconQuery::Kind::Prefix, prefix, 512},
+        // only after measuring missed candidates on the real packs. A
+        // provider with a fuzzy index found these in the Candidate query
+        // (nearSlip): only the others are searched again.
+        lexiconProvider_.Find({LexiconQuery::Kind::Prefix, prefix, 512, lower.size() > 2 || maxDistance < 2},
                               addRankedEntry);
     }
     ranker_.RankCorrections(ranked, lower.size());

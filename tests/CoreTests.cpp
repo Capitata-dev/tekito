@@ -1711,16 +1711,17 @@ void TestLocalDataPackProviders() {
     const auto hall = engine->Convert({L"hall"});
     Require(hall.candidates.size() > 1 && hall.candidates.front().text == L"hall",
             "a valid longer prefix keeps raw first while still offering candidates");
-    const bool hasHello = std::any_of(hall.candidates.begin(), hall.candidates.end(), [](const auto& candidate) {
-        return candidate.text == L"hello";
+    // A word this short is offered the words one edit away (hello is two).
+    const bool hasHell = std::any_of(hall.candidates.begin(), hall.candidates.end(), [](const auto& candidate) {
+        return candidate.text == L"hell";
     });
-    if (!hasHello) {
+    if (!hasHell) {
         std::wcerr << L"[hall candidates]";
         for (const auto& candidate : hall.candidates) std::wcerr << L" " << candidate.text;
         std::wcerr << L"\n";
     }
-    Require(hasHello,
-            "fuzzy candidate generation offers hello for hall without auto-applying it");
+    Require(hasHell,
+            "fuzzy candidate generation offers hell for hall without auto-applying it");
     contextualBoundary.BeginOrUpdate(L"hall", hall.candidates);
     Require(contextualBoundary.OnSpace().text == L"hall ",
             "fuzzy suggestions for a valid word remain opt-in");
