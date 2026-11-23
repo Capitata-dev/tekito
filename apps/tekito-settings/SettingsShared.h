@@ -83,6 +83,9 @@ constexpr int kRetryWebView = 200;
 // is only sent a new state when one of them moved.
 constexpr UINT_PTR kStateWatchTimer = 1;
 constexpr UINT kStateWatchIntervalMs = 500;
+// WM_COPYDATA's dwData from a second "TEKITO.exe --page <page>": the
+// "#page" to open, in UTF-16.
+constexpr ULONG_PTR kOpenPage = 0x50414745;  // 'PAGE'
 // A postal code download finished (lParam: PostalDownload*).
 constexpr UINT kPostalDownloaded = WM_APP + 1;
 

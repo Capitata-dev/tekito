@@ -214,9 +214,11 @@ std::wstring SettingsApp::JapaneseWordsJson() const {
 }
 
 // "--page <name>" on the command line opens that page (the setup's
-// "See typing samples": --page samples).
+// "See typing samples": --page samples; the desktop companion's menu). With
+// Settings already open, the open window is sent it (kOpenPage).
 std::wstring SettingsApp::StartPageHash() {
-    static constexpr std::wstring_view kPages[] = {L"general", L"japanese", L"mixed", L"auto", L"dictionary", L"about", L"samples"};
+    static constexpr std::wstring_view kPages[] = {L"general", L"conversion", L"slips", L"notation", L"candidates", L"keys",
+                                                    L"dictionary", L"all", L"about", L"samples", L"japanese", L"mixed", L"auto"};
     int count = 0;
     LPWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &count);
     std::wstring hash;

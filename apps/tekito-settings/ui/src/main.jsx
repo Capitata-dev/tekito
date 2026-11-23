@@ -350,6 +350,17 @@ function App() {
   // into view and marked for a moment.
   const [visit, setVisit] = useState(0);
   const [focusRow, setFocusRow] = useState(null);
+  // "--page" again while Settings is open (the desktop companion's menu):
+  // the host changes the hash, and that page opens.
+  useEffect(() => {
+    const go = () => {
+      setPage(pageFromHash());
+      setVisit((n) => n + 1);
+      setFocusRow(null);
+    };
+    window.addEventListener("hashchange", go);
+    return () => window.removeEventListener("hashchange", go);
+  }, []);
   const open = (id, rowId, details) => {
     if (details) {
       try {

@@ -346,6 +346,19 @@ LRESULT CALLBACK SettingsApp::WindowProc(HWND hwnd, UINT message, WPARAM wParam,
         SetTimer(hwnd, kStateWatchTimer, kStateWatchIntervalMs, nullptr);
         return 0;
     }
+    if (message == WM_COPYDATA) {
+        // A page to open, from a second "TEKITO.exe --page <page>": "#"
+        // and a page's name, nothing else.
+        const auto* data = reinterpret_cast<const COPYDATASTRUCT*>(lParam);
+        if (!data || data->dwData != kOpenPage || !data->lpData || data->cbData > 64 * sizeof(wchar_t)) return FALSE;
+        const std::wstring hash(static_cast<const wchar_t*>(data->lpData), data->cbData / sizeof(wchar_t));
+        if (hash.size() < 2 || hash[0] != L'#' ||
+            !std::all_of(hash.begin() + 1, hash.end(), [](wchar_t c) { return c >= L'a' && c <= L'z'; })) {
+            return FALSE;
+        }
+        if (self->webview_) self->webview_->ExecuteScript((L"location.hash = '" + hash + L"';").c_str(), nullptr);
+        return TRUE;
+    }
     if (message == kAiWindowsMlInstalled) {
         self->FinishWindowsMlInstall(static_cast<tekito::userdata::AiModelInstallError>(wParam), static_cast<int>(lParam));
         return 0;

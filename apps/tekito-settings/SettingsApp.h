@@ -25,6 +25,8 @@ namespace tekito::settings {
 class SettingsApp final {
 public:
     bool Initialize(HINSTANCE instance);
+    // "#page" from "--page <page>" on the command line; empty without it.
+    static std::wstring StartPageHash();
     int Run();
 
 private:
@@ -94,7 +96,6 @@ private:
     std::wstring ReportSettings() const;
     static std::wstring QueryEncoded(std::wstring_view text);
     std::wstring JapaneseWordsJson() const;
-    static std::wstring StartPageHash();
     std::wstring SettingsStateJson();
     static std::wstring NameListJson(const std::vector<std::wstring>& names);
     std::wstring AiModelsJson() const;

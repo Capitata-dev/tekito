@@ -83,8 +83,13 @@ constexpr float kZPen = 18.0f;
 // Dragged, it swings against the way it goes, up to this much.
 constexpr float kSwingDegrees = 14.0f;
 
+// Its menu's items; a mode's is kMenuMode plus the mode.
 constexpr UINT kMenuSettings = 1;
 constexpr UINT kMenuHide = 2;
+constexpr UINT kMenuSecret = 3;
+constexpr UINT kMenuWords = 4;
+constexpr UINT kMenuReport = 5;
+constexpr UINT kMenuMode = 16;
 
 // The mode it shows with its color, as the taskbar's mode icons: Auto blue
 // (its own), Mix orange, Japanese navy; grey with no conversion (Direct)
@@ -806,7 +811,14 @@ private:
         const bool japanese = profile_ == Profile::Japanese;
         const auto current = japanese ? tekito::userdata::AvailableMode(settings_, true, runtime_->JapaneseMode())
                                       : runtime_->Mode();
-        const auto next = tekito::userdata::NextSwitchMode(settings_, japanese, current);
+        SetModeTo(tekito::userdata::NextSwitchMode(settings_, japanese, current));
+    }
+
+    // `next` as the mode of the keyboard it shows, kept as Settings keeps it
+    // (the mode TEKITO starts in next time).
+    void SetModeTo(tekito::InputMode next) {
+        if (profile_ == Profile::None) return;
+        const bool japanese = profile_ == Profile::Japanese;
         tekito::userdata::UserSettings saved;
         if (!repository_->LoadSettings(saved)) saved = settings_;
         if (japanese) {
@@ -824,10 +836,52 @@ private:
         UpdateShown();
     }
 
+    // Settings, opened at `page` when there is one (TEKITO.exe --page).
+    static void OpenSettings(const wchar_t* page = nullptr) {
+        std::wstring command = L"\"" + AppPath() + L"\"";
+        if (page) command += std::wstring(L" --page ") + page;
+        STARTUPINFOW startup{sizeof(startup)};
+        PROCESS_INFORMATION process{};
+        if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process)) {
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+        }
+    }
+
+    // Right-click: the modes of the keyboard it shows, secret mode, adding a
+    // word, reporting a wrong conversion, Settings, and hiding it.
     void ShowMenu() {
         const bool japanese = tekito::userdata::UseJapaneseUi(settings_.uiLanguage);
         HMENU menu = CreatePopupMenu();
+        if (profile_ != Profile::None) {
+            using tekito::InputMode;
+            const bool japaneseKeyboard = profile_ == Profile::Japanese;
+            const auto current = japaneseKeyboard
+                                     ? tekito::userdata::AvailableMode(settings_, true, runtime_->JapaneseMode())
+                                     : runtime_->Mode();
+            const std::pair<InputMode, const wchar_t*> modes[] = {
+                {InputMode::Japanese, japanese ? L"日本語" : L"Japanese"},
+                {InputMode::Mixed, japanese ? L"まぜ打ち" : L"Mix"},
+                {InputMode::Convert, L"Auto"},
+                {InputMode::Direct, L"Direct"},
+            };
+            for (const auto& [mode, name] : modes) {
+                // Japanese and Mix only where they are modes.
+                if (tekito::TypesJapanese(mode) &&
+                    (!japaneseKeyboard || tekito::userdata::AvailableMode(settings_, true, mode) != mode)) {
+                    continue;
+                }
+                AppendMenuW(menu, MF_STRING | (mode == current ? MF_CHECKED : 0), kMenuMode + static_cast<UINT>(mode), name);
+            }
+            AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        }
+        AppendMenuW(menu, MF_STRING | (runtime_->Secret() ? MF_CHECKED : 0), kMenuSecret,
+                    japanese ? L"シークレットモード" : L"Secret mode");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, kMenuWords, japanese ? L"単語を登録する" : L"Add a word");
+        AppendMenuW(menu, MF_STRING, kMenuReport, japanese ? L"誤変換を報告する" : L"Report a wrong conversion");
         AppendMenuW(menu, MF_STRING, kMenuSettings, japanese ? L"設定を開く" : L"Open Settings");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING, kMenuHide, japanese ? L"コンパニオンを非表示にする" : L"Hide the companion");
         POINT at;
         GetCursorPos(&at);
@@ -835,14 +889,17 @@ private:
         const UINT chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, at.x, at.y, 0, hwnd_, nullptr);
         PostMessageW(hwnd_, WM_NULL, 0, 0);
         DestroyMenu(menu);
-        if (chosen == kMenuSettings) {
-            std::wstring command = L"\"" + AppPath() + L"\"";
-            STARTUPINFOW startup{sizeof(startup)};
-            PROCESS_INFORMATION process{};
-            if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process)) {
-                CloseHandle(process.hThread);
-                CloseHandle(process.hProcess);
-            }
+        if (chosen >= kMenuMode && chosen < kMenuMode + 8) {
+            SetModeTo(static_cast<tekito::InputMode>(chosen - kMenuMode));
+        } else if (chosen == kMenuSecret) {
+            // As the language bar's menu does: for this session only.
+            runtime_->SetSecret(!runtime_->Secret());
+        } else if (chosen == kMenuWords) {
+            OpenSettings(L"dictionary");
+        } else if (chosen == kMenuReport) {
+            OpenSettings(L"about");
+        } else if (chosen == kMenuSettings) {
+            OpenSettings();
         } else if (chosen == kMenuHide) {
             // The setting off, as from Settings.
             tekito::userdata::UserSettings current;

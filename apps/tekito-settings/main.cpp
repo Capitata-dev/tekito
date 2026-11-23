@@ -116,6 +116,11 @@ int RunTekitoSettings(HINSTANCE instance) {
         if (HWND existing = FindWindowW(kClassName, nullptr)) {
             ShowWindow(existing, SW_RESTORE);
             SetForegroundWindow(existing);
+            if (const auto hash = SettingsApp::StartPageHash(); !hash.empty()) {
+                COPYDATASTRUCT data{kOpenPage, static_cast<DWORD>(hash.size() * sizeof(wchar_t)),
+                                    const_cast<wchar_t*>(hash.c_str())};
+                SendMessageW(existing, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&data));
+            }
         }
         if (singleInstance) CloseHandle(singleInstance);
         if (comInitialized) CoUninitialize();
