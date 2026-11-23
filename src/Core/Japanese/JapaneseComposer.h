@@ -101,6 +101,18 @@ enum SentenceFeature : std::size_t {
     kSentenceFeatures
 };
 
+// The Japanese (and Mix) composition: keys in, kana, conversion, candidates,
+// committed text out. Its code is split by module:
+//   JapaneseComposer.cpp       settings, committing, context, what shows
+//   ComposerTyping.cpp         keys to kana, the caret, deleting
+//   ComposerLive.cpp           live conversion
+//   ComposerPredictions.cpp    predictions, forgetting what was learned
+//   ComposerConversion.cpp     reading to phrases, moving between them
+//   ComposerCandidates.cpp     what a candidate list holds and its order
+//   ComposerSlips.cpp          slips undone
+//   ComposerSentenceCheck.cpp  the sentence model and the AI choosing
+//   ComposerMix.cpp            Mix: Japanese and English chunks
+//   ComposerShared.h           helpers those files share
 class JapaneseComposer final {
 public:
     explicit JapaneseComposer(const RomajiTable* table = nullptr) noexcept : table_(table) {}

@@ -2,6 +2,7 @@
 // typing Japanese. The English typing path is in TextService.cpp.
 
 #include "Tsf/TextService.h"
+#include "Tsf/TextServiceShared.h"
 
 #include "Core/Japanese/JapaneseData.h"
 #include "Core/Japanese/JapaneseUserDictionary.h"
@@ -993,6 +994,70 @@ HRESULT TextService::WriteJapaneseCommit(ITfContext* context, TfEditCookie editC
     const HRESULT hr = ReplaceComposition(context, editCookie, text);
     if (FAILED(hr)) return hr;
     return EndComposition(editCookie);
+}
+
+
+void TextService::CheckJapaneseContext(ITfContext* context, TfEditCookie editCookie) {
+    const std::wstring before = ReadSelectionContext(context, editCookie);
+    // Mix: English there starts with a capital when a sentence starts.
+    japanese_.SetSentenceStart(japanese::JapaneseComposer::EndsSentence(before));
+    if (lastJapaneseCommit_.empty() || !before.ends_with(lastJapaneseCommit_)) {
+        japanese_.ForgetContext();
+    }
+    // The text before the caret, for conversion and the sentence check to
+    // read on from; kept in memory only, and not read in a private field.
+    if (!privateField_) japanese_.SetPrecedingText(before);
+}
+
+HRESULT TextService::ReconvertJapanese(ITfContext* context, TfEditCookie editCookie) {
+    TF_SELECTION selection{};
+    ULONG fetched = 0;
+    if (FAILED(context->GetSelection(editCookie, TF_DEFAULT_SELECTION, 1, &selection, &fetched)) || fetched != 1 ||
+        !selection.range) {
+        return S_OK;
+    }
+    ComPtr<ITfRange> range;
+    range.Attach(selection.range);
+    std::wstring text = ReadRangeText(range.Get(), editCookie);
+    // Nothing selected: the text just committed, while the caret is after it.
+    const bool committed = text.empty();
+    if (committed) {
+        if (lastJapaneseCommit_.empty() || !ReadSelectionContext(context, editCookie).ends_with(lastJapaneseCommit_)) {
+            return S_OK;
+        }
+        text = lastJapaneseCommit_;
+    }
+    // A short piece of one line only (a longer selection may not be read whole).
+    constexpr std::size_t kLongest = 64;
+    // An embedded object (a picture in Word) shows as U+FFFC: never replaced.
+    if (text.size() > kLongest || text.find_first_of(L"\r\n\t\xFFFC") != std::wstring::npos) return S_OK;
+    if (!japanese_.Reconvert(text)) return S_OK;
+    japanese_.ForgetCommit();
+    lastJapaneseCommit_.clear();
+    const HRESULT hr = committed ? StartCompositionBefore(context, editCookie, text.size())
+                                 : EnsureComposition(context, editCookie);
+    if (FAILED(hr)) {
+        japanese_.Clear();
+        return hr;
+    }
+    return ShowJapanesePreedit(context, editCookie);
+}
+
+HRESULT TextService::UndoJapaneseCommit(ITfContext* context, TfEditCookie editCookie) {
+    // Only while the caret is still right after the text.
+    const auto* last = japanese_.LastCommit();
+    if (!last || !ReadSelectionContext(context, editCookie).ends_with(*last)) {
+        japanese_.ForgetCommit();
+        return S_OK;
+    }
+    const std::wstring text = *last;
+    HRESULT hr = ReplaceTrailingWhitespaceAtSelection(context, editCookie, text.size(), std::wstring{});
+    if (FAILED(hr)) return hr;
+    japanese_.UndoCommit();
+    lastJapaneseCommit_.clear();
+    hr = EnsureComposition(context, editCookie);
+    if (FAILED(hr)) return hr;
+    return ShowJapanesePreedit(context, editCookie);
 }
 
 }  // namespace tekito::tsf

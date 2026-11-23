@@ -30,6 +30,14 @@ enum class MeaningLanguage;
 
 namespace tekito::tsf {
 
+// TEKITO's text input processor. Its code is split by area:
+//   TextService.cpp             COM, activation, settings, modes, sinks
+//   TextServiceKeys.cpp         which keys it takes, the key edit session
+//   TextServiceEnglish.cpp      English input and words looked at again
+//   TextServiceJapanese.cpp     Japanese and Mix input
+//   TextServiceComposition.cpp  the composition in the document
+//   TextServiceCandidates.cpp   the candidate list and the mode badge
+//   TextServiceShared.h         helpers those files share
 class TextService final : public ITfTextInputProcessorEx,
                           public ITfKeyEventSink,
                           public ITfCompositionSink,

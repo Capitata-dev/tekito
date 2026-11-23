@@ -152,6 +152,10 @@ add_library(Tekito.Tsf SHARED
     src/Tsf/Registration.cpp
     src/Tsf/TekitoGuids.cpp
     src/Tsf/TextService.cpp
+    src/Tsf/TextServiceKeys.cpp
+    src/Tsf/TextServiceEnglish.cpp
+    src/Tsf/TextServiceComposition.cpp
+    src/Tsf/TextServiceCandidates.cpp
     src/Tsf/Tekito.Tsf.def
     assets/tekito_tsf.rc
 )
