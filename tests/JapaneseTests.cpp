@@ -2316,6 +2316,18 @@ void TestMeanings() {
     RequireText(first(L"機械", L"きかい"), L"機械:仕事をする装置。", "WordNet fills in for Wiktionary");
     RequireText(first(L"はし", L"はし"), L"はし:川に渡した構築物。", "kana words are found as they are");
     RequireText(first(L"はしった", L"はしった"), L"-", "but kana is never cut into another word");
+    // Wiktionary's pointers to other entries are never shown as meanings.
+    RequireText(first(L"10代", L""), L"10代:年齢が十歳から十九歳までの間。", "a pointer is the entry it points to");
+    RequireText(first(L"お下がり", L""), L"お下がり:目上の人から譲られた使い古しの物。", "written without brackets too");
+    RequireText(first(L"あかぎ", L""), L"あかぎ:姓や地名のなのり。", "a last sentence that only points goes");
+    RequireText(first(L"ボタン", L""), L"ボタン:衣服の合わせ目に用いる留め具。", "whatever it names");
+    RequireText(first(L"ゲール語", L""), L"ゲール語:ケルト系の言語。", "and a pointer in brackets");
+    RequireText(first(L"おおたか", L""), L"おおたか:鳥の名", "an entry not there: what came before it");
+    RequireText(first(L"どら焼き", L""), L"-", "a pointer to nothing is no meaning");
+    RequireText(first(L"何故", L""), L"何故:どうして。なぜ。", "a row pointing to nothing gives way to the next row");
+    RequireText(first(L"盛り土", L""), L"盛り土:土を盛り上げること。", "each entry a pointer names, without its reading");
+    RequireText(first(L"かの", L""), L"かの:（すでに話題に出た事項を参照する）あの。その。",
+                "参照 in an explanation stays");
     const auto english = meanings.Lookup(L"Meeting");
     Require(english && english->senses.size() == 2 && english->senses[1] == L"the act of coming together",
             "English meanings are split into senses");

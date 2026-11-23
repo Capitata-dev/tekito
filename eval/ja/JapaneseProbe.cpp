@@ -122,7 +122,9 @@ int main(int argc, char** argv) {
                 continue;
             }
             std::cout << line << "\t" << Narrow(meaning->headword) << "\t" << Narrow(meaning->base) << "\t"
-                      << Narrow(meaning->form) << "\t" << Narrow(meaning->senses.front()) << "\n";
+                      << Narrow(meaning->form);
+            for (const auto& sense : meaning->senses) std::cout << "\t" << Narrow(sense);
+            std::cout << "\n";
         }
         return 0;
     }
