@@ -1,6 +1,7 @@
 #include "apps/tekito-settings/Companion.h"
 
 #include "apps/tekito-settings/CompanionBubble.h"
+#include "apps/tekito-settings/CompanionLookup.h"
 
 #include "apps/tekito-settings/CompanionShapes.h"
 #include "UserData/RuntimeModeState.h"
@@ -9,10 +10,13 @@
 #include "UserData/UserSettings.h"
 
 #include <d2d1_1.h>
+#include <ole2.h>
 #include <shellapi.h>
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <atomic>
+#include <functional>
 #include <chrono>
 #include <climits>
 #include <cmath>
@@ -89,6 +93,7 @@ constexpr UINT kMenuHide = 2;
 constexpr UINT kMenuSecret = 3;
 constexpr UINT kMenuWords = 4;
 constexpr UINT kMenuReport = 5;
+constexpr UINT kMenuLookUp = 6;
 constexpr UINT kMenuMode = 16;
 
 // The mode it shows with its color, as the taskbar's mode icons: Auto blue
@@ -108,6 +113,91 @@ constexpr Look kLooks[] = {
      {{0.0f, 0x9fb4ff}, {1.0f, 0x5470d8}}},
     {{{0.0f, 0xe4e4e4}, {0.3f, 0xb9b9b9}, {0.55f, 0x9b9b9b}, {0.75f, 0xa9a9a9}, {1.0f, 0xcdcdcd}},
      {{0.0f, 0xe0e0e0}, {1.0f, 0xa0a0a0}}},
+};
+
+// Text, from a drop or the clipboard: as much as a word or a phrase needs.
+constexpr std::size_t kMostText = 512;
+
+std::optional<std::wstring> TextOf(IDataObject* data) {
+    FORMATETC format{CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM medium{};
+    if (!data || FAILED(data->GetData(&format, &medium))) return std::nullopt;
+    std::optional<std::wstring> text;
+    if (const auto* chars = static_cast<const wchar_t*>(GlobalLock(medium.hGlobal))) {
+        const std::size_t most = std::min<std::size_t>(GlobalSize(medium.hGlobal) / sizeof(wchar_t), kMostText);
+        text = std::wstring(chars, std::find(chars, chars + most, L'\0'));
+        GlobalUnlock(medium.hGlobal);
+    }
+    ReleaseStgMedium(&medium);
+    return text;
+}
+
+std::optional<std::wstring> ClipboardText(HWND owner) {
+    if (!OpenClipboard(owner)) return std::nullopt;
+    std::optional<std::wstring> text;
+    if (HANDLE handle = GetClipboardData(CF_UNICODETEXT)) {
+        if (const auto* chars = static_cast<const wchar_t*>(GlobalLock(handle))) {
+            const std::size_t most = std::min<std::size_t>(GlobalSize(handle) / sizeof(wchar_t), kMostText);
+            text = std::wstring(chars, std::find(chars, chars + most, L'\0'));
+            GlobalUnlock(handle);
+        }
+    }
+    CloseClipboard();
+    return text;
+}
+
+// Text dropped on it (a word dragged from a page or a document): taken as a
+// copy, nothing moved from where it was.
+class TextDrop final : public IDropTarget {
+public:
+    TextDrop(std::function<void(bool)> hovering, std::function<void(std::wstring)> dropped)
+        : hovering_(std::move(hovering)), dropped_(std::move(dropped)) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** out) override {
+        if (!out) return E_POINTER;
+        if (id == IID_IUnknown || id == IID_IDropTarget) {
+            *out = static_cast<IDropTarget*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++references_; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG left = --references_;
+        if (left == 0) delete this;
+        return left;
+    }
+    HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD, POINTL, DWORD* effect) override {
+        FORMATETC format{CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+        accepts_ = data && data->QueryGetData(&format) == S_OK;
+        *effect = accepts_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+        if (accepts_) hovering_(true);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DragOver(DWORD, POINTL, DWORD* effect) override {
+        *effect = accepts_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DragLeave() override {
+        hovering_(false);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Drop(IDataObject* data, DWORD, POINTL, DWORD* effect) override {
+        hovering_(false);
+        *effect = DROPEFFECT_NONE;
+        if (auto text = TextOf(data)) {
+            *effect = DROPEFFECT_COPY;
+            dropped_(std::move(*text));
+        }
+        return S_OK;
+    }
+
+private:
+    std::function<void(bool)> hovering_;
+    std::function<void(std::wstring)> dropped_;
+    std::atomic<ULONG> references_{1};
+    bool accepts_{false};
 };
 
 std::wstring AppPath() {
@@ -307,6 +397,9 @@ public:
                                 L"TEKITO", WS_POPUP, at.x, at.y, 1, 1, nullptr, nullptr, instance, this);
         if (!hwnd_) return false;
         (void)bubble_.Create(instance);
+        drop_ = new TextDrop([this](bool on) { dropHover_ = on; },
+                             [this](std::wstring text) { LookUpAndSay(text); });
+        (void)RegisterDragDrop(hwnd_, drop_);
         Resize(GetDpiForWindow(hwnd_));
         if (!KeepOnScreen(saved_)) MoveTo(DefaultPlace());
         motion_ = AnimationsEnabled();
@@ -320,6 +413,10 @@ public:
             const auto bar = say.find(L'|');
             Say(say.substr(0, bar), bar == std::wstring::npos ? std::wstring{} : say.substr(bar + 1), 60.0);
         }
+        // TEKITO_COMPANION_LOOKUP=<word>: that word looked up at first.
+        std::wstring word(256, L'?');
+        word.resize(GetEnvironmentVariableW(L"TEKITO_COMPANION_LOOKUP", word.data(), static_cast<DWORD>(word.size())));
+        if (!word.empty()) LookUpAndSay(word);
 #endif
         return true;
     }
@@ -399,6 +496,11 @@ private:
             if (!KeepOnScreen(place_)) MoveTo(DefaultPlace());
             return 0;
         case WM_DESTROY:
+            if (drop_) {
+                RevokeDragDrop(hwnd);
+                drop_->Release();
+                drop_ = nullptr;
+            }
             PostQuitMessage(0);
             return 0;
         default:
@@ -538,7 +640,7 @@ private:
         Fidget(t, sleepy);
         Follow(t, sleepy);
         const bool happy = t < happyUntil_;
-        const bool listening = !happy && (hover_ || dragging_);
+        const bool listening = !happy && (hover_ || dragging_ || dropHover_);
         const bool blink = !secret_ && !happy && !sleepy && std::fmod(t, kBlinkPeriod) / kBlinkPeriod > 0.93;
 
         // Swinging against the way it is dragged, and back.
@@ -770,6 +872,18 @@ private:
             japanese ? L"英字が大文字で入力されます" : L"Letters are typed in capitals");
     }
 
+    // A word handed to it: what it reads and means, for a while.
+    void LookUpAndSay(const std::wstring& text) {
+        const bool japanese = tekito::userdata::UseJapaneseUi(settings_.uiLanguage);
+        const auto found = tekito::companion::LookUp(text, japanese);
+        if (found.title.empty()) {
+            Say(japanese ? L"言葉が見つかりませんでした" : L"No word was found", L"", 3.0);
+            return;
+        }
+        Cheer();
+        Say(found.title, found.body, 10.0);
+    }
+
     // A note beside it for a few seconds.
     void Say(const std::wstring& title, const std::wstring& body, double seconds = 4.0) {
         if (hidden_) return;
@@ -878,6 +992,8 @@ private:
         AppendMenuW(menu, MF_STRING | (runtime_->Secret() ? MF_CHECKED : 0), kMenuSecret,
                     japanese ? L"シークレットモード" : L"Secret mode");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, kMenuLookUp, japanese ? L"コピーした言葉を調べる" : L"Look up the copied word");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING, kMenuWords, japanese ? L"単語を登録する" : L"Add a word");
         AppendMenuW(menu, MF_STRING, kMenuReport, japanese ? L"誤変換を報告する" : L"Report a wrong conversion");
         AppendMenuW(menu, MF_STRING, kMenuSettings, japanese ? L"設定を開く" : L"Open Settings");
@@ -894,6 +1010,13 @@ private:
         } else if (chosen == kMenuSecret) {
             // As the language bar's menu does: for this session only.
             runtime_->SetSecret(!runtime_->Secret());
+        } else if (chosen == kMenuLookUp) {
+            const auto text = ClipboardText(hwnd_);
+            if (text && !text->empty()) {
+                LookUpAndSay(*text);
+            } else {
+                Say(japanese ? L"コピーした言葉はありません" : L"Nothing is copied", L"", 3.0);
+            }
         } else if (chosen == kMenuWords) {
             OpenSettings(L"dictionary");
         } else if (chosen == kMenuReport) {
@@ -1031,6 +1154,8 @@ private:
     POINT pressedAt_{};
     POINT pressedPlace_{};
     tekito::companion::Bubble bubble_;
+    TextDrop* drop_{nullptr};
+    bool dropHover_{false};
     bool capsLock_{false};
     bool capsKnown_{false};
 };
@@ -1051,12 +1176,15 @@ std::optional<int> RunCompanionFromCommandLine() {
         return 0;
     }
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    // Words dropped on it come by OLE drag and drop.
+    const bool ole = SUCCEEDED(OleInitialize(nullptr));
     int result = 0;
     {
         Companion companionWindow;
         // Not created when the setting is off (left in Windows' startup list).
         if (companionWindow.Create(GetModuleHandleW(nullptr))) result = companionWindow.Run();
     }
+    if (ole) OleUninitialize();
     ReleaseMutex(single);
     CloseHandle(single);
     return result;

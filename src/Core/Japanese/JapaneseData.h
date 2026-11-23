@@ -12,6 +12,7 @@ class AiJudge;
 enum class AiModel : int;
 enum class AiDevice : int;
 class JapaneseComposer;
+class JapaneseConverter;
 class MeaningDictionary;
 class PostalCodes;
 class RomajiTable;
@@ -43,6 +44,9 @@ void ReloadUserRomaji();
 [[nodiscard]] std::shared_ptr<const PostalCodes> ProcessPostalCodes();
 // The meaning packs, mapped on first use; lookups read them in place.
 [[nodiscard]] const MeaningDictionary& ProcessMeanings();
+// The converter over the Japanese dictionaries (what a written word reads,
+// JapaneseConverter::ReadingOf); null without japanese-core.
+[[nodiscard]] const JapaneseConverter* ProcessConverter();
 
 // The AI model `model` as converting asks it (TekitoAI.exe); null for
 // AiModel::None or while its pack is not installed.

@@ -242,6 +242,11 @@ std::shared_ptr<const PostalCodes> ProcessPostalCodes() {
     return cached;
 }
 
+const JapaneseConverter* ProcessConverter() {
+    const auto* data = ProcessJapaneseData();
+    return data ? data->converter.get() : nullptr;
+}
+
 const MeaningDictionary& ProcessMeanings() {
     static const std::unique_ptr<MeaningDictionary> meanings = [] {
         auto opened = std::make_unique<MeaningDictionary>();
