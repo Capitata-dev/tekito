@@ -930,7 +930,15 @@ void TextService::ShowJapaneseCandidates(ITfContext* context, TfEditCookie editC
         Candidate row;
         row.text = list.rows[i].text;
         row.id = list.rows[i].number;
-        if (list.rows[i].suggestion) row.label = SemanticLabel::Suggestion;
+        // One tag a row: a "maybe", what was typed, then its width.
+        using Width = japanese::CandidateList::Row::Width;
+        if (list.rows[i].suggestion) {
+            row.label = SemanticLabel::Suggestion;
+        } else if (list.rows[i].asTyped) {
+            row.isOriginal = true;
+        } else if (list.rows[i].width != Width::None) {
+            row.label = list.rows[i].width == Width::Full ? SemanticLabel::FullWidth : SemanticLabel::HalfWidth;
+        }
         row.groupStart = list.rows[i].groupStart;
         // Only the rows on the page shown are looked up.
         row.hasMeaning = userSettings_.meaningsEnabled && i >= list.pageStart && i < list.pageStart + list.count &&

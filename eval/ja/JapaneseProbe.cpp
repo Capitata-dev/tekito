@@ -453,8 +453,23 @@ int main(int argc, char** argv) {
         // As the list opens (with the chunk candidates, marked ^).
         if (sentences) composer.ShowCandidates();
         if (const auto* list = composer.FocusedCandidates()) {
+            // With the tags the list shows: [?] a maybe, [=] as typed,
+            // [F] and [H] full- and half-width.
+            std::vector<tekito::japanese::CandidateList::Row> tagged;
+            for (const auto& candidate : *list) {
+                tekito::japanese::CandidateList::Row row;
+                row.text = candidate.text;
+                row.suggestion = candidate.slip || candidate.spellingCorrection || candidate.englishCorrection;
+                row.asTyped = candidate.asTyped;
+                tagged.push_back(std::move(row));
+            }
+            tekito::japanese::MarkWidths(tagged);
+            using Width = tekito::japanese::CandidateList::Row::Width;
             for (std::size_t i = 0; i < list->size() && i < rows; ++i) {
-                std::cout << (i ? " | " : "") << ((*list)[i].chunk ? "^" : "") << Narrow((*list)[i].text);
+                const auto& row = tagged[i];
+                const char* tag = row.suggestion ? "[?]" : row.asTyped ? "[=]" : row.width == Width::Full ? "[F]"
+                                                     : row.width == Width::Half ? "[H]" : "";
+                std::cout << (i ? " | " : "") << ((*list)[i].chunk ? "^" : "") << Narrow((*list)[i].text) << tag;
             }
             std::cout << "  (" << list->size() << ")";
         }

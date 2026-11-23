@@ -629,6 +629,25 @@ void TestComposerConversion(const RomajiTable& table, const MiniPack& pack) {
     Require(!composer.IsConverted(), "typing after a conversion starts typing again");
 }
 
+// Rows the same but for width take its tag; the usual kana forms none.
+void TestWidthMarks() {
+    using Row = tekito::japanese::CandidateList::Row;
+    using Width = Row::Width;
+    std::vector<Row> rows;
+    for (const wchar_t* text : {L"公園", L"KOUEN", L"\xFF2B\xFF2F\xFF35\xFF25\xFF2E", L"\xFF7A\xFF73\xFF74\xFF9D",
+                                L"\x30B3\x30A6\x30A8\x30F3", L"\x3053\x3046\x3048\x3093", L"Kouen"}) {
+        Row row;
+        row.text = text;
+        rows.push_back(std::move(row));
+    }
+    tekito::japanese::MarkWidths(rows);
+    Require(rows[0].width == Width::None, "a word with no twin takes no tag");
+    Require(rows[1].width == Width::Half && rows[2].width == Width::Full, "KOUEN and its full-width twin");
+    Require(rows[3].width == Width::Half, "half-width katakana beside its usual form");
+    Require(rows[4].width == Width::None && rows[5].width == Width::None, "katakana and hiragana as usually written");
+    Require(rows[6].width == Width::None, "another case is no twin");
+}
+
 // Commit at punctuation: the text before the mark commits, the mark stays
 // for its other forms, and goes on with the next key.
 void TestMarkLeft(const RomajiTable& table, const MiniPack& pack) {
@@ -3200,6 +3219,7 @@ int main(int argc, char** argv) {
     TestKeys(*table, *pack);
     TestListColumns(*table, *pack);
     TestMarkLeft(*table, *pack);
+    TestWidthMarks();
     TestLiveConversion(*table, *pack);
     TestAddresses(*table, *pack);
     TestCapitals(*table, *pack);

@@ -3479,6 +3479,26 @@ std::vector<PhraseCandidate> JapaneseComposer::EnglishCandidates(const std::wstr
             for (auto& candidate : phrases.front().candidates) add(std::move(candidate.text), candidate.kind);
         }
     }
+    // The word spelled otherwise than typed, its letters not only their case
+    // or a hyphen (recieve: receive; not iphone: iPhone, usbc: USB-C): a
+    // "maybe", and the keys as typed beside it.
+    const auto letters = [](std::wstring_view text) {
+        std::wstring out;
+        for (const wchar_t c : text) {
+            if (std::iswalnum(c)) out.push_back(static_cast<wchar_t>(std::towlower(c)));
+        }
+        return out;
+    };
+    const std::wstring typed = Keys(false);
+    if (!candidates.empty() && candidates.front().kind == PhraseCandidate::Kind::English &&
+        letters(candidates.front().text) != letters(typed)) {
+        const auto asTyped = std::find_if(candidates.begin() + 1, candidates.end(),
+                                          [&](const PhraseCandidate& c) { return c.text == typed; });
+        if (asTyped != candidates.end()) {
+            candidates.front().englishCorrection = true;
+            asTyped->asTyped = true;
+        }
+    }
     return candidates;
 }
 

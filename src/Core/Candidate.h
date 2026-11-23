@@ -17,6 +17,10 @@ enum class SemanticLabel {
     Emoji,
     // A reading of the keys with a slip undone, or a spelling correction.
     Suggestion,
+    // The same as another candidate in the list but for its width (ＫＯＵＥＮ
+    // and KOUEN): which of the two it is.
+    FullWidth,
+    HalfWidth,
 };
 
 enum CandidatePolicyFlags : std::uint32_t {

@@ -1,5 +1,7 @@
 #include "Core/Japanese/JapaneseKeys.h"
 
+#include "Core/Japanese/KanaText.h"
+
 #include <algorithm>
 
 namespace tekito::japanese {
@@ -364,6 +366,35 @@ KeyOutcome ApplyKey(JapaneseComposer& composer, const KeyCommand& command) {
     return outcome;
 }
 
+// Rows the same but for width (ＫＯＵＥＮ and KOUEN, ３千円 and 3千円, ｺｳｴﾝ
+// and コウエン): the full-width ASCII one is the wider, the half-width
+// katakana one and the ASCII one beside a full-width twin the narrower.
+// Katakana and hiragana as usually written take no mark.
+void MarkWidths(std::vector<CandidateList::Row>& rows) {
+    using Width = CandidateList::Row::Width;
+    const auto has = [](const std::wstring& text, wchar_t from, wchar_t to) {
+        return std::any_of(text.begin(), text.end(), [&](wchar_t c) { return c >= from && c <= to; });
+    };
+    std::vector<std::wstring> keys;
+    keys.reserve(rows.size());
+    for (const auto& row : rows) keys.push_back(ToHalfWidthKatakana(row.text));
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        bool twin = false;
+        bool fullTwin = false;
+        for (std::size_t j = 0; j < rows.size(); ++j) {
+            if (j == i || keys[j] != keys[i] || rows[j].text == rows[i].text) continue;
+            twin = true;
+            fullTwin = fullTwin || has(rows[j].text, 0xFF01, 0xFF5E);
+        }
+        if (!twin) continue;
+        if (has(rows[i].text, 0xFF01, 0xFF5E)) {
+            rows[i].width = Width::Full;
+        } else if (has(rows[i].text, 0xFF61, 0xFF9F) || (fullTwin && has(rows[i].text, 0x21, 0x7E))) {
+            rows[i].width = Width::Half;
+        }
+    }
+}
+
 ListPage ListPageOf(std::size_t index, std::size_t size, std::size_t pageSize) noexcept {
     pageSize = std::max<std::size_t>(pageSize, 1);
     const std::size_t grid = kListColumns * pageSize;
@@ -396,9 +427,10 @@ CandidateList CandidateListFor(const JapaneseComposer& composer, std::size_t pag
         // The first page numbered; the columns after it not, as digits
         // choose from the first page only.
         list.rows.push_back({candidate.text, reading, static_cast<std::uint32_t>(i < pageSize ? i + 1 : 0),
-                             candidate.slip || candidate.spellingCorrection,
-                             i > 0 && (*candidates)[i - 1].chunk && !candidate.chunk});
+                             candidate.slip || candidate.spellingCorrection || candidate.englishCorrection,
+                             i > 0 && (*candidates)[i - 1].chunk && !candidate.chunk, candidate.asTyped});
     }
+    MarkWidths(list.rows);
     const std::size_t selected = std::min(composer.FocusedSelection(), candidates->size() - 1);
     list.selected = selected;
     const auto page = ListPageOf(selected, list.rows.size(), pageSize);

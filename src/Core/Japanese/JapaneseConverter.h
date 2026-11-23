@@ -41,6 +41,10 @@ struct PhraseCandidate {
     bool spellingCorrection{false};
     // Read from the keys with a slip undone (offered in the list, "moshikashite").
     bool slip{false};
+    // Mix: an English word spelled otherwise than its keys (recieve: receive),
+    // and the keys as typed beside it ("moshikashite" and "as typed").
+    bool englishCorrection{false};
+    bool asTyped{false};
     // Set when the candidate is the whole input read again (a slip across
     // phrases): choosing it makes this the reading, as one phrase.
     std::wstring reading;

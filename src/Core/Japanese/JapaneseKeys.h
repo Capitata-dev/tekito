@@ -134,11 +134,18 @@ struct CandidateList {
         std::wstring reading;
         // The number shown beside it (1-9 on each page).
         std::uint32_t number{0};
-        // Read with a slip undone, or a spelling Mozc corrects.
+        // Read with a slip undone, or a spelling Mozc corrects (Mix: an
+        // English word spelled otherwise than typed).
         bool suggestion{false};
         // The first of the phrase's own candidates after its chunk
         // candidates (PhraseCandidate::chunk): a line above it.
         bool groupStart{false};
+        // Mix: the English keys as typed, beside a word spelled otherwise.
+        bool asTyped{false};
+        // The same as another row but for its width: the wider or the
+        // narrower of the two (None: no such row).
+        enum class Width : std::uint8_t { None, Full, Half };
+        Width width{Width::None};
     };
     Kind kind{Kind::None};
     std::vector<Row> rows;
@@ -166,6 +173,9 @@ struct ListPage {
     std::size_t pages{1};
 };
 [[nodiscard]] ListPage ListPageOf(std::size_t index, std::size_t size, std::size_t pageSize) noexcept;
+
+// Marks the rows the same as another but for width (Row::width).
+void MarkWidths(std::vector<CandidateList::Row>& rows);
 
 [[nodiscard]] CandidateList CandidateListFor(const JapaneseComposer& composer, std::size_t pageSize);
 

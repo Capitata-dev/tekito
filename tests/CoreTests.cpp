@@ -170,6 +170,16 @@ void TestSpaceBoundaryAndAutoApplyPolicy() {
     Require(state.OnSpace().text == L"target " && state.IsActive(),
             "User Dictionary correct policy can be accepted at Space");
 
+    // Slang is offered, never put in by itself, even marked as a correction.
+    const tekito::AutoApplyPolicy slangPolicy;
+    const std::vector<tekito::Candidate> slangCandidates{
+        {L"gonna", tekito::SemanticLabel::Slang, false, 100.0, false, tekito::CandidatePolicyCorrect,
+         tekito::CandidateSourceSingleEdit},
+        {L"goona", tekito::SemanticLabel::Original, true},
+    };
+    Require(!slangPolicy.SelectForBoundary(L"goona", slangCandidates, std::nullopt),
+            "slang is never applied by itself");
+
     state.BeginOrUpdate(L"protected", {
         {L"target", tekito::SemanticLabel::Standard, false, 100.0, false,
          tekito::CandidatePolicyProtect, tekito::CandidateSourceUserDictionary},

@@ -552,22 +552,21 @@ POINT CandidatePosition(const RECT& caretRect, int width, int height, int caretG
     return {x, y};
 }
 
-std::wstring LabelText(const Candidate& candidate, bool japanese) {
-    // Deliberately minimal: a label only earns a place here if knowing it
-    // changes whether the user would pick this candidate. ORIGINAL says
-    // "nothing was changed"; SLANG says "this is an informal substitution,
-    // not a spelling fix"; EMOJI disambiguates a glyph that can be hard to
-    // read at candidate-row size. Every other SemanticLabel (proper noun,
-    // phrase, reaction, abbreviation, standard correction, ...) explains
-    // *why* the engine generated the candidate, not whether the user should
-    // want it, so it stays unlabeled to keep the row scannable.
-    if (candidate.isOriginal) return japanese ? L"そのまま" : L"ORIGINAL";
-    // The empty row that takes out a word typed twice.
+// A row's tag, only where its text does not tell and knowing changes the
+// pick; one a row. What a candidate is (emoji, a date, katakana) shows.
+// `originalFirst`: what was typed leads the list, so it needs no tag.
+std::wstring LabelText(const Candidate& candidate, bool japanese, bool originalFirst) {
+    // The empty row that takes out a word typed twice: its tag is all it shows.
     if ((candidate.sourceFlags & CandidateSourceDoubledWord) != 0) return japanese ? L"重複を削除" : L"REMOVE REPEAT";
-    if (candidate.label == SemanticLabel::Slang) return japanese ? L"スラング" : L"SLANG";
-    if (candidate.label == SemanticLabel::Emoji) return japanese ? L"絵文字" : L"EMOJI";
     // Not what was typed: the user should know before picking it.
     if (candidate.label == SemanticLabel::Suggestion) return japanese ? L"もしかして" : L"TYPO";
+    // What was typed, when something else comes first.
+    if (candidate.isOriginal) return originalFirst ? std::wstring{} : japanese ? L"そのまま" : L"ORIGINAL";
+    // Slang offered for what was typed.
+    if (candidate.label == SemanticLabel::Slang) return japanese ? L"スラング" : L"SLANG";
+    // The same as another row but for width, which is hard to see.
+    if (candidate.label == SemanticLabel::FullWidth) return japanese ? L"全角" : L"FULL-WIDTH";
+    if (candidate.label == SemanticLabel::HalfWidth) return japanese ? L"半角" : L"HALF-WIDTH";
     return {};
 }
 
@@ -2733,12 +2732,14 @@ void CandidateWindow::Show(const RECT& caretRect,
     frame.page = page;
     frame.pages = pages;
     frame.rows.reserve(visibleCount_);
+    const bool originalFirst = candidates_.front().isOriginal;
     for (std::size_t row = 0; row < visibleCount_; ++row) {
         const auto index = pageStart_ + row;
         const auto& candidate = candidates_[index];
         const auto displayId = candidate.id == 0 ? index + 1 : candidate.id;
         frame.rows.push_back({columnRows > 0 ? std::wstring{} : std::to_wstring(displayId), candidate.text,
-                              LabelText(candidate, japanese_), candidate.hasMeaning, candidate.groupStart && row > 0});
+                              LabelText(candidate, japanese_, originalFirst), candidate.hasMeaning,
+                              candidate.groupStart && row > 0});
     }
     if (selectedIndex_ >= pageStart_ && selectedIndex_ - pageStart_ < visibleCount_) {
         frame.selectedRow = selectedIndex_ - pageStart_;
