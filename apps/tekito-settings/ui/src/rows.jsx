@@ -162,7 +162,7 @@ export const switchKeyCaps = (toggleKey, japaneseKeyboard, t) =>
   : toggleKey === 3 ? ["Ctrl", "Shift", "Space"]
   : null;
 
-// The keys, by mode: [id, name, keycaps]. The ids are what AI answers name.
+// The keys, by mode: [id, name, keycaps].
 export function keyGroups(t, { japaneseKeyboard, settings, japanese }) {
   const general = [];
   const switchKey = switchKeyCaps(settings.toggleKey, japaneseKeyboard, t);

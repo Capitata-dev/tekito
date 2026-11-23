@@ -68,7 +68,7 @@ export function hostRequest(type, payload = {}, files = []) {
       "postalCodes.browse", "postalCodes.import", "postalCodes.download", "japaneseWords.browse",
       "japaneseWords.import", "romaji.browse", "romaji.import"].includes(type);
     // Home's AI may load its model first.
-    const timeout = opensDialog ? 600000 : type === "ai.score" ? 120000 : 4000;
+    const timeout = opensDialog ? 600000 : 4000;
     window.setTimeout(() => finish({ ok: false, error: "", state: null }), timeout);
   });
 }

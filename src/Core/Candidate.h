@@ -17,12 +17,12 @@ enum class SemanticLabel {
     Emoji,
     // A reading of the keys with a slip undone, or a spelling correction.
     Suggestion,
-    // The same as another candidate in the list but for its width (ＫＯＵＥＮ
-    // and KOUEN): which of the two it is.
+    // The same as another candidate in the list but for its width (full-
+    // width and half-width letters): which of the two it is.
     FullWidth,
     HalfWidth,
-    // A kanji written another way: its old form (旧字体), another variant
-    // (異体字).
+    // A kanji written another way: its old form (kyujitai), or another
+    // variant (itaiji).
     OldForm,
     VariantForm,
 };

@@ -77,53 +77,6 @@ bool SettingsApp::HandleDownloadsRequest(const std::wstring& type, const std::ws
         }).detach();
         Reply(requestId, true);
         PostState();
-    } else if (type == L"ai.score") {
-        // Home's AI: the texts (one a line) scored after the user's words.
-        const auto texts = message.String(L"texts");
-        std::vector<std::wstring> lines;
-        for (std::size_t start = 0; start <= texts.size();) {
-            const auto end = std::min(texts.find(L'\n', start), texts.size());
-            if (end > start) lines.push_back(texts.substr(start, end - start));
-            start = end + 1;
-        }
-        if (lines.empty() || lines.size() > 256 || !SettingsAiReady()) {
-            Reply(requestId, false, Text(L"AI is not ready.", L"AI を使えません。"));
-            return true;
-        }
-        auto* ask = new ScoredAsk{std::wstring(requestId)};
-        // Where the user's AI runs; the GPU or the NPU only with Windows ML.
-        const auto root = AiDataRoot();
-        const int chosen = std::clamp(settings_.japaneseAiDevice, 0, 3);
-        const auto device = chosen >= 2 && tekito::userdata::AiRuntimeHasWindowsMl(root)
-                                ? static_cast<tekito::japanese::AiDevice>(chosen)
-                                : tekito::japanese::AiDevice::Cpu;
-        std::thread([hwnd = hwnd_, ask, prompt = message.String(L"prompt"), base = message.String(L"base"), lines, device,
-                     gpu = static_cast<std::uint32_t>(settings_.japaneseAiGpu)] {
-            if (auto scores = ScoreTexts(prompt, base, lines, device, gpu)) {
-                ask->scores = std::move(*scores);
-                ask->ok = true;
-            }
-            if (!PostMessageW(hwnd, kAiScored, 0, reinterpret_cast<LPARAM>(ask))) delete ask;
-        }).detach();
-    } else if (type == L"settingsAi.download") {
-        // The user agreed to download Settings' AI model by itself.
-        if (aiDownloading_ || settingsAiDownloading_) {
-            Reply(requestId, false);
-            return true;
-        }
-        settingsAiDownloading_ = true;
-        aiError_.clear();
-        std::thread([hwnd = hwnd_, root = AiDataRoot()] {
-            auto* download = new AiModelDownload{0};
-            download->error = UpdateAiRuntime(root);
-            if (download->error == tekito::userdata::AiModelInstallError::None &&
-                !tekito::userdata::AiModelPackInstalled(kSettingsAi.pack, root)) {
-                download->error = DownloadAiPack(kSettingsAi, root);
-            }
-            if (!PostMessageW(hwnd, kAiModelInstalled, 0, reinterpret_cast<LPARAM>(download))) delete download;
-        }).detach();
-        Reply(requestId, true);
-        PostState();
     } else if (type == L"aiRuntime.windowsMl") {
         // The user agreed to Microsoft's terms for the GPU or the NPU.
         const int device = static_cast<int>(message.Number(L"device"));
@@ -258,23 +211,13 @@ void SettingsApp::FinishJapaneseDataInstall(tekito::userdata::AiModelInstallErro
     PostState();
 }
 
-// Settings' AI model and what runs it are there.
-bool SettingsApp::SettingsAiReady() {
-    const auto root = AiDataRoot();
-    return tekito::userdata::AiModelPackInstalled(kSettingsAi.pack, root) && tekito::userdata::AiRuntimeRunsSettings(root);
-}
-
 void SettingsApp::FinishAiModelInstall(std::unique_ptr<AiModelDownload> download) {
     aiDownloading_ = 0;
-    settingsAiDownloading_ = false;
     using tekito::userdata::AiModelInstallError;
     switch (download->error) {
     case AiModelInstallError::None:
-        // 0: Settings' own model alone.
-        if (download->model > 0) {
-            settings_.japaneseSentenceModel = download->model;
-            (void)SaveSettings();
-        }
+        settings_.japaneseSentenceModel = download->model;
+        (void)SaveSettings();
         break;
     case AiModelInstallError::Download:
         aiError_ = Text(L"The AI model could not be downloaded. Check the connection and try again.",

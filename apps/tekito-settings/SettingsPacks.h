@@ -93,64 +93,6 @@ constexpr AiModelInfo kAiRuntimeWindowsMl{
 
 inline tekito::userdata::AiModelInstallError DownloadAiPack(const AiModelInfo& pack, const std::filesystem::path& root);
 
-// Settings' own model, for Home's AI (LFM2.5-350M-Base, not trained
-// further): downloaded with the first conversion model, or by itself when
-// one is already there.
-constexpr AiModelInfo kSettingsAi{
-    L"settings-ai", L"https://github.com/Capitata-dev/tekito/releases/download/ai-models-3/TEKITO-settings-ai.zip",
-    "8099BB4BF9266F6C96EFBD875DAD28DE231E40A14220D62DFAA54CC621307FA8", 357791102ull, L"2026.11"};
-
-// Home's AI, asked how likely each text reads after what the user asked for
-// (`prompt`) against after nothing (`base`): ln p(text | prompt) - ln p(text
-// | base), each setting's description by Settings' AI model. Asked from a
-// thread; the texts after `base`, the same each time, are kept.
-struct ScoredAsk {
-    std::wstring requestId;
-    std::vector<double> scores;
-    bool ok{false};
-};
-inline std::optional<std::vector<double>> ScoreTexts(const std::wstring& prompt, const std::wstring& base,
-                                              const std::vector<std::wstring>& texts, tekito::japanese::AiDevice device,
-                                              std::uint32_t gpu) {
-    static std::mutex cacheMutex;
-    static std::map<std::wstring, double> baseCache;
-    const tekito::japanese::AiHelperClient client(tekito::japanese::AiModel::Settings, device, gpu,
-                                                  std::chrono::milliseconds(60'000), tekito::japanese::aihelper::kMaxSentences);
-    // ln p of each text after `context`, asked a pipe-full at a time.
-    const auto after = [&](const std::wstring& context, const std::vector<std::wstring>& asked)
-        -> std::optional<std::vector<double>> {
-        std::vector<double> scores;
-        for (std::size_t at = 0; at < asked.size(); at += tekito::japanese::aihelper::kMaxSentences) {
-            const auto end = std::min(asked.size(), at + tekito::japanese::aihelper::kMaxSentences);
-            const std::vector<std::wstring> part(asked.begin() + static_cast<std::ptrdiff_t>(at),
-                                                 asked.begin() + static_cast<std::ptrdiff_t>(end));
-            const auto answer = client.Convert(L"", part, context, false);
-            if (!answer) return std::nullopt;
-            scores.insert(scores.end(), answer->scores.begin(), answer->scores.end());
-        }
-        return scores;
-    };
-    std::vector<std::wstring> missing;
-    {
-        std::lock_guard lock(cacheMutex);
-        for (const auto& text : texts) {
-            if (!baseCache.contains(base + L'\x1F' + text)) missing.push_back(text);
-        }
-    }
-    if (!missing.empty()) {
-        const auto scored = after(base, missing);
-        if (!scored) return std::nullopt;
-        std::lock_guard lock(cacheMutex);
-        for (std::size_t i = 0; i < missing.size(); ++i) baseCache[base + L'\x1F' + missing[i]] = (*scored)[i];
-    }
-    const auto conditioned = after(prompt, texts);
-    if (!conditioned) return std::nullopt;
-    std::vector<double> scores;
-    std::lock_guard lock(cacheMutex);
-    for (std::size_t i = 0; i < texts.size(); ++i) scores.push_back((*conditioned)[i] - baseCache[base + L'\x1F' + texts[i]]);
-    return scores;
-}
-
 // The copy of what runs the models this Settings would download: with
 // Windows ML when that is the one there.
 inline const AiModelInfo& AiRuntimeFor(const std::filesystem::path& root) {
@@ -182,11 +124,6 @@ inline tekito::userdata::AiModelInstallError DownloadAiModel(int model, const st
     using tekito::userdata::AiModelInstallError;
     if (const auto error = UpdateAiRuntime(root); error != AiModelInstallError::None) return error;
     if (const auto error = DownloadAiPack(kAiModels[model - 1], root); error != AiModelInstallError::None) return error;
-    // Home's AI comes with the first model; without it, conversion is still
-    // there, and Home offers to download it.
-    if (!tekito::userdata::AiModelPackInstalled(kSettingsAi.pack, root) || AiPackOutdated(kSettingsAi, root)) {
-        (void)DownloadAiPack(kSettingsAi, root);
-    }
     return AiModelInstallError::None;
 }
 

@@ -45,7 +45,6 @@ const initialSettings = {
   socialPersonalization: 1,
   candidateWindowStyle: 0,
   candidateRows: 0,
-  aiSettingsControl: 1,
   mixPunctuation: 0,
   mixDigitWidth: 0,
   mixNumberStyle: 1,
@@ -151,9 +150,6 @@ function pageFromHash() {
   return pageAliases[id] || (pageIds.includes(id) || subPages.includes(id) ? id : "home");
 }
 
-// The AI model files by japaneseSentenceModel.
-const aiModelKeys = ["", "light", "strong"];
-
 function App() {
   const [page, setPage] = useState(pageFromHash);
   const [connection, setConnection] = useState({ status: "loading", error: "" });
@@ -206,8 +202,6 @@ function App() {
       // Remembering is a convenience only.
     }
   };
-  // Home's conversation with AI, kept while Settings is open.
-  const [conversation, setConversation] = useState([]);
 
   const t = messages[resolveLanguage(settings.uiLanguage, appearance.systemLanguage)];
   const japaneseInstalled = Boolean(runtime.japanese);
@@ -394,19 +388,12 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // AI answers Home's box once a model is chosen and there.
-  // Home asks AI once Settings' AI model is there; with a conversion model
-  // and not it, Home offers to download it.
-  const chosenModel = settings.japaneseSentenceModel || 0;
-  const conversionAi = chosenModel > 0 && Boolean(aiModels[aiModelKeys[chosenModel]]?.installed) && Boolean(aiModels.runtime?.installed);
-  const aiReady = Boolean(aiModels.settings?.installed) && Boolean(aiModels.runtime?.installed);
-  const settingsAiOffer = conversionAi && !aiReady;
   const on = { japanese, mixed, auto: true, direct: true };
   const japaneseKeyboard = Boolean(runtime.japaneseKeyboard);
   const ctx = {
     t, settings, setSetting, runAction, setConfirm, showKeys: setKeys, open, on, multi: japanese || mixed, japaneseInstalled,
     windowsInput: { ctrlShift: runtime.ctrlShiftSwitches !== false, tekitoDefault: Boolean(runtime.tekitoDefault), defaultSaved: Boolean(runtime.defaultSaved) },
-    japaneseKeyboard, aiModels, postalCodes, openRomaji: () => open("romaji"), aiReady, settingsAiOffer, chat: { messages: conversation, setMessages: setConversation },
+    japaneseKeyboard, aiModels, postalCodes, openRomaji: () => open("romaji"),
     japaneseInstalling: Boolean(runtime.japaneseInstalling), japaneseDataBytes: runtime.japaneseDataBytes || 0,
     japaneseAddable: runtime.japaneseAddable !== false, japaneseDataError: runtime.japaneseDataError || "",
     encryption,
@@ -446,7 +433,7 @@ function App() {
               </Card>
             ) : (
               <>
-                {current === "home" && <HomePage ctx={ctx} aiReady={aiReady} />}
+                {current === "home" && <HomePage ctx={ctx} />}
                 {pageGroups[current] && <CatalogPage page={current} ctx={ctx} />}
                 {current === "all" && <AllSettingsPage ctx={ctx} defaults={initialSettings} />}
                 {current === "dictionary" && <DictionaryPage {...pageProps} japanese={japaneseInstalled} learning={learning} encryption={encryption}

@@ -54,9 +54,6 @@ bool SettingsApp::HandleSettingsRequest(const std::wstring& type, const std::wst
         else if (key == L"candidateRows") {
             settings_.candidateRows = tekito::userdata::UserSettings::ValidCandidateRows(integerValue);
         }
-        else if (key == L"aiSettingsControl") {
-            settings_.aiSettingsControl = std::clamp(integerValue, 0, 2);
-        }
         else if (key == L"periodOnEnter") settings_.periodOnEnter = value;
         else if (key == L"nextWordPrediction") settings_.nextWordPrediction = value;
         else if (key == L"doubledWordCheck") settings_.doubledWordCheck = value;

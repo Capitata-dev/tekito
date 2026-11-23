@@ -122,7 +122,6 @@ private:
     void FinishPostalDownload(std::unique_ptr<PostalDownload> download);
     static std::optional<JapaneseDataInfo> ReadJapaneseDataInfo();
     void FinishJapaneseDataInstall(tekito::userdata::AiModelInstallError error);
-    static bool SettingsAiReady();
     void FinishAiModelInstall(std::unique_ptr<AiModelDownload> download);
     void FinishWindowsMlInstall(tekito::userdata::AiModelInstallError error, int device);
     void FinishNpuPrepare(bool ready);
@@ -163,7 +162,6 @@ private:
     bool npuPreparing_{false};
     bool windowsMlDownloading_{false};
     bool japaneseInstalling_{false};
-    bool settingsAiDownloading_{false};
     std::wstring japaneseDataError_;
     std::wstring npuError_;
     EventRegistrationToken navigationToken_{};

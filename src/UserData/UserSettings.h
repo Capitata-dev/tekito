@@ -48,10 +48,6 @@ struct UserSettings {
     static constexpr int kMinCandidateRows = 3;
     static constexpr int kMaxCandidateRows = 20;
     int candidateRows{0};
-    // What AI may change when asked in Settings' Home: 0 = it only suggests
-    // (the user applies), 1 = it changes settings to the values Settings
-    // offers, 2 = also to any value in a setting's range.
-    int aiSettingsControl{1};
     // The candidate list shows what the highlighted word means, in a pane
     // beside it (the japanese-slang, japanese-wiktionary, japanese-wordnet
     // and dictionary-display packs).

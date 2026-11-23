@@ -14,6 +14,11 @@ const en = {
     keys: "Keys & typing", dictionary: "Dictionary & learning", all: "All settings", about: "About", samples: "Typing samples",
     romaji: "Romaji table", japanese: "Japanese", mixed: "Mix", auto: "Auto", ai: "AI",
   },
+  tags: {
+    japanese: "Japanese", english: "English", mixed: "Mix", convert: "Conversion", switching: "Switching modes", look: "Look",
+    list: "Candidate list", slips: "Typos", predict: "Predictions", notation: "Formatting", keys: "Keys", dictionary: "Dictionary & learning",
+    privacy: "Privacy", apps: "Apps", ai: "AI",
+  },
   samples: {
     description: "Short clips of what each mode does",
     names: {
@@ -55,21 +60,10 @@ const en = {
     keyboard: "Keyboard", typing: "Typing",
   },
   home: {
-    modes: "Input modes",
-    placeholderAi: "e.g. stop correcting my English",
-    askLabel: "Ask AI",
-    ask: (query) => `Ask AI: “${query}”`,
-    asking: "AI is looking for settings",
-    failed: "Couldn't ask AI.",
-    nothing: "No settings match.",
-    apply: (label) => (label ? `Apply: ${label}` : "Apply"),
-    undo: "Undo",
     openIn: (page) => `Open ${page}`,
-    allDescription: "Every setting on one page, or only the ones you changed",
-    greetingsAi: ["Which setting would you like to change?", "Anything about typing that bothers you?",
-      "Anything you would like to change?", "What shall we tidy up today?", "Anything that did not go as you meant?"],
-    greetings: ["Search settings by name.", "Which setting are you looking for?", "Which setting would you like to change?"],
+    greetings: ["Search settings by name or tag.", "Which setting are you looking for?", "Which setting would you like to change?"],
   },
+
   linked: {
     link: (first, second) => `Use the same setting for ${first} and ${second}`,
     unlink: (first, second) => `Set ${first} and ${second} separately`,
@@ -78,27 +72,6 @@ const en = {
   widths: { title: "Full-width and half-width", description: "e.g. half-width abc!?, full-width ａｂｃ！？", letters: "Letters", symbols: "Symbols", space: "Space" },
   special: { title: "Dates, symbols and sums as candidates", parts: ["Date and time", "Symbols", "Sums"], none: "Off" },
   slips: { capitalizedExample: "e.g. Cjicago → Chicago", spaceless: ["Off", "Common words", "All words"] },
-  chat: {
-    label: "Ask AI", next: "Reply to AI", newChat: "New conversation", send: "Send", thinking: "Looking", changes: "Changes", related: "Related",
-    refused: "AI can't change this", undone: "Undone", on: "On", off: "Off", byGrade: "Up to a school year",
-    choose: "These settings may be what you mean. Change the one that fits.", found: "This setting changes that.",
-    changed: (title, label) => `Set ${title} to “${label}”.`, already: (title, label) => `${title} is already “${label}”.`,
-    suggest: (title, label) => `Suggested: ${title} to “${label}”. Apply to change it.`, cannot: "AI can't change this setting. Change it below.",
-    undoneAll: "Put back as it was.",
-    eggs: {
-      cat: (on) => (on ? "Well spotted. The cat is here: it meows with each key you press." : "The cat is asleep now."),
-      rainbow: (on) => (on ? "Well spotted. The accent color goes round the rainbow now." : "The rainbow is over."),
-    },
-    help: "I change TEKITO's settings for you, finding them from what bothers you or what you want, like “English gets corrected on its own” or “show more candidates”.",
-    nothingFits: [
-      "I could not find a setting for that. I can also find one from what you want, like “show more candidates”.",
-      "Hmm, no setting fits that. Try telling me what bothers you, like “English gets corrected on its own”.",
-      "Sorry, I didn't catch that one. Ask me about anything in typing that bothers you.",
-    ],
-    about: (title, description) => `${title}: ${description}`.replace(/([^.])$/, "$1."), needModel: (mb) => `Asking AI needs Settings' AI model (about ${mb} MB).`,
-    download: "Download", downloadTitle: "Download Settings' AI model?",
-    downloadBody: (mb) => `About ${mb} MB is downloaded from TEKITO's release on GitHub. It is Liquid AI's model (LFM Open License) and runs on this PC only.`,
-  },
   modes: {
     find: (name) => `${name} mode`, mixed: "Japanese and English without switching",
     orderDescription: "The checked modes take turns with the switch key, in this order",
@@ -106,11 +79,6 @@ const en = {
     addTitle: "Download the Japanese data?",
     addBody: (bytes) => `${bytes ? `About ${Math.round(bytes / 1e6)} MB is downloaded from TEKITO's release on GitHub. ` : ""}Japanese and Mix become available, and Windows' language settings get TEKITO as a Japanese keyboard.`,
     download: "Download", added: "Japanese is added",
-  },
-  aiControl: {
-    title: "Settings AI may change",
-    description: "When you ask on Home",
-    options: ["Suggest only", "Settings' choices", "Any value in range"],
   },
   all: { every: "All", changed: (n) => `Changed (${n})`, reset: "Reset to default", none: "No settings are changed." },
 
@@ -484,6 +452,11 @@ const ja = {
     keys: "キーと入力", dictionary: "辞書と学習", all: "すべての設定", about: "情報", samples: "入力の見本",
     romaji: "ローマ字表", japanese: "日本語", mixed: "まぜ打ち", auto: "Auto", ai: "AI",
   },
+  tags: {
+    japanese: "日本語", english: "英語", mixed: "まぜ打ち", convert: "変換", switching: "モードの切り替え", look: "見た目",
+    list: "候補一覧", slips: "入力ミス", predict: "予測・補完", notation: "表記", keys: "キー", dictionary: "辞書と学習",
+    privacy: "プライバシー", apps: "アプリ", ai: "AI",
+  },
   samples: {
     description: "各モードでできる入力を、短い動画で確認できます",
     names: {
@@ -525,21 +498,10 @@ const ja = {
     keyboard: "キーボード", typing: "入力",
   },
   home: {
-    modes: "入力モード",
-    placeholderAi: "例：英語が勝手に直される",
-    askLabel: "AI に聞く",
-    ask: (query) => `「${query}」を AI に聞く`,
-    asking: "AI が設定を探しています",
-    failed: "AI に聞けませんでした。",
-    nothing: "当てはまる設定はありません。",
-    apply: (label) => (label ? `適用：${label}` : "適用"),
-    undo: "元に戻す",
     openIn: (page) => `${page}を開く`,
-    allDescription: "すべての設定を1ページで確認できます。変更した設定だけに絞り込めます",
-    greetingsAi: ["どの設定を変えますか？", "気になっていることはありますか？", "困っていることはありますか？",
-      "今日はどこを整えましょうか。", "思いどおりにいかなかったことはありますか？"],
-    greetings: ["設定を名前で探せます。", "どの設定をお探しですか？", "変えたい設定はどれですか？"],
+    greetings: ["設定を名前やタグで探せます。", "どの設定をお探しですか？", "変えたい設定はどれですか？"],
   },
+
   linked: {
     link: (first, second) => `${first}と${second}で同じ設定にする`,
     unlink: (first, second) => `${first}と${second}で別々に設定する`,
@@ -548,27 +510,6 @@ const ja = {
   widths: { title: "全角と半角", description: "例：半角 abc!?、全角 ａｂｃ！？", letters: "英字", symbols: "記号", space: "スペース" },
   special: { title: "日付・記号・計算を候補に表示", parts: ["日付と時刻", "記号", "計算結果"], none: "表示しない" },
   slips: { capitalizedExample: "例：Cjicago → Chicago", spaceless: ["オフ", "よく使う語のみ", "すべての語"] },
-  chat: {
-    label: "AI に聞く", next: "AI に返信", newChat: "新しい会話", send: "送信", thinking: "探しています", changes: "変更", related: "関連",
-    refused: "AI では変更できません", undone: "元に戻しました", on: "オン", off: "オフ", byGrade: "学年まで",
-    choose: "当てはまりそうな設定です。合うものを変更してください。", found: "この設定で変更できます。",
-    changed: (title, label) => `${title}を「${label}」にしました。`, already: (title, label) => `${title}はすでに「${label}」です。`,
-    suggest: (title, label) => `${title}を「${label}」にする提案です。「適用」を押すと変更されます。`, cannot: "この設定は AI では変更できません。下から変更してください。",
-    undoneAll: "元に戻しました。",
-    eggs: {
-      cat: (on) => (on ? "よく気付きましたね。ねこを呼びました。キーを押すたびに鳴きます。" : "ねこはおやすみです。"),
-      rainbow: (on) => (on ? "よく気付きましたね。アクセントカラーが虹色に変わり続けます。" : "虹はおしまいです。"),
-    },
-    help: "TEKITO の設定を変更できます。「英語が勝手に直される」「候補をもっと出したい」のような困りごとや変えたいことから、当てはまる設定を探します。",
-    nothingFits: [
-      "当てはまる設定が見つかりませんでした。「候補をもっと出したい」のような、変えたいことからでも探せます。",
-      "うーん、それに合う設定は見つかりませんでした。「英語が勝手に直される」のような困りごとからも探せます。",
-      "ごめんなさい、それはわかりませんでした。入力のことで気になることがあれば、何でも聞いてください。",
-    ],
-    about: (title, description) => `「${title}」は、${description}。`.replace(/。。$/, "。"), needModel: (mb) => `AI に頼むには、設定用の AI モデル（約 ${mb} MB）が必要です。`,
-    download: "ダウンロード", downloadTitle: "設定用の AI モデルをダウンロードしますか？",
-    downloadBody: (mb) => `GitHub の TEKITO のリリースから約 ${mb} MB がダウンロードされます。Liquid AI のモデル（LFM Open License）で、この PC の中だけで動きます。`,
-  },
   modes: {
     find: (name) => `${name}モード`, mixed: "日本語と英語を切り替えずに入力できます",
     orderDescription: "チェックしたモードが、切り替えキーでこの順に切り替わります",
@@ -576,11 +517,6 @@ const ja = {
     addTitle: "日本語のデータをダウンロードしますか？",
     addBody: (bytes) => `${bytes ? `GitHub の TEKITO のリリースから約 ${Math.round(bytes / 1e6)} MB がダウンロードされます。` : ""}日本語とまぜ打ちのモードが使えるようになり、Windows の言語設定には TEKITO が日本語のキーボードとして追加されます。`,
     download: "ダウンロード", added: "日本語を追加しました",
-  },
-  aiControl: {
-    title: "AI による設定の変更",
-    description: "ホームで頼んだときに、AI が変更できる範囲です",
-    options: ["提案のみ", "選択肢の範囲で変更", "数値も変更"],
   },
   all: { every: "すべて", changed: (n) => `変更した設定（${n}）`, reset: "既定に戻す", none: "変更した設定はありません。" },
 

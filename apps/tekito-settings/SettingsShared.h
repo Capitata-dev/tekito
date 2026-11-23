@@ -125,8 +125,6 @@ constexpr UINT kAiNpuPrepared = WM_APP + 3;
 constexpr UINT kAiWindowsMlInstalled = WM_APP + 4;
 // The Japanese data downloaded and installed (wParam: AiModelInstallError).
 constexpr UINT kJapaneseDataInstalled = WM_APP + 5;
-// Home's AI has scored what the user asked for (lParam: a ScoredAsk).
-constexpr UINT kAiScored = WM_APP + 6;
 // TEKITO's two keyboards in Windows' language list, as setup adds them
 // (installer/install.ps1): English, and Japanese, which also types English.
 constexpr wchar_t kEnglishTip[] = L"0409:{6F67E5C8-A873-4B69-8EC3-26DF00F642F1}{8D99240A-5C9C-4ED8-8DE4-85F21DF23763}";

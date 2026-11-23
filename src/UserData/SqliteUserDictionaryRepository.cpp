@@ -445,8 +445,6 @@ bool SqliteUserDictionaryRepository::LoadSettings(UserSettings& settings) const 
             loaded.mixFirstPageSymbol = value != 0;
         } else if (std::strcmp(key, "candidate_rows") == 0) {
             loaded.candidateRows = UserSettings::ValidCandidateRows(value);
-        } else if (std::strcmp(key, "ai_settings_control") == 0) {
-            loaded.aiSettingsControl = std::clamp(value, 0, 2);
         } else if (std::strcmp(key, "meanings_enabled") == 0) {
             loaded.meaningsEnabled = value != 0;
         } else if (std::strcmp(key, "meanings_in_ui_language") == 0) {
@@ -751,7 +749,6 @@ bool SqliteUserDictionaryRepository::SaveSettings(const UserSettings& settings) 
     saveValue("rainbow_accent", settings.rainbowAccent ? 1 : 0);
     saveValue("cat_sounds", settings.catSounds ? 1 : 0);
     saveValue("desktop_companion", settings.desktopCompanion ? 1 : 0);
-    saveValue("ai_settings_control", settings.aiSettingsControl);
     saveValue("mix_english_underline", settings.mixEnglishUnderline ? 1 : 0);
     saveValue("mix_live_conversion", settings.mixLiveConversion ? 1 : 0);
     saveValue("mix_ai", settings.mixAi ? 1 : 0);

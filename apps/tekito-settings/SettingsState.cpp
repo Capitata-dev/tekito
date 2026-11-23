@@ -277,7 +277,6 @@ std::wstring SettingsApp::SettingsStateJson() {
     json += L",\"candidateWindowStyle\":" + std::to_wstring(settings_.candidateWindowStyle);
     json += L",\"candidateWindowScale\":" + std::to_wstring(settings_.candidateWindowScale);
     json += L",\"candidateRows\":" + std::to_wstring(settings_.candidateRows);
-    json += L",\"aiSettingsControl\":" + std::to_wstring(settings_.aiSettingsControl);
     json += L",\"japaneseSwitchOrder\":" + std::to_wstring(settings_.japaneseSwitchOrder);
     json += L",\"switchModes\":" + std::to_wstring(settings_.switchModes);
     json += L",\"mixPredictionEnabled\":";
@@ -457,32 +456,19 @@ std::wstring SettingsApp::AiModelsJson() const {
     const wchar_t* names[] = {L"light", L"strong"};
     for (std::size_t i = 0; i < std::size(kAiModels); ++i) {
         // An older version there: downloading it again replaces it
-        // (and what runs it, and Settings' model, when they are older).
+        // (and what runs it, when it is older).
         const auto root = AiDataRoot();
         const bool installed = tekito::userdata::AiModelPackInstalled(kAiModels[i].pack, root);
         const bool modelOld = installed && AiPackOutdated(kAiModels[i], root);
         const bool runtimeOld = installed && tekito::userdata::AiRuntimeInstalled(root) &&
                                 AiPackOutdated(AiRuntimeFor(root), root);
-        const bool settingsOld = installed && AiPackOutdated(kSettingsAi, root);
         const auto updateBytes = (modelOld ? kAiModels[i].bytes : 0ull) +
-                                 (runtimeOld ? AiRuntimeFor(root).bytes : 0ull) +
-                                 (settingsOld ? kSettingsAi.bytes : 0ull);
+                                 (runtimeOld ? AiRuntimeFor(root).bytes : 0ull);
         json += std::wstring(i ? L"," : L"") + L"\"" + names[i] + L"\":{\"installed\":" +
                 (installed ? L"true" : L"false") + L",\"bytes\":" + std::to_wstring(kAiModels[i].bytes) +
                 L",\"update\":" + (updateBytes ? L"true" : L"false") + L",\"updateBytes\":" +
                 std::to_wstring(updateBytes) + L"}";
     }
-    // Ready only with what runs it too; else what is left to download
-    // (an older copy of what runs the models, replaced).
-    const auto root = AiDataRoot();
-    const bool settingsPack = tekito::userdata::AiModelPackInstalled(kSettingsAi.pack, root);
-    const auto runtimeBytes = tekito::userdata::AiRuntimeRunsSettings(root) ? 0ull
-                              : tekito::userdata::AiRuntimeHasWindowsMl(root) ? kAiRuntimeWindowsMl.bytes
-                                                                               : kAiRuntime.bytes;
-    json += std::wstring(L",\"settings\":{\"installed\":") + (SettingsAiReady() ? L"true" : L"false") +
-            L",\"bytes\":" + std::to_wstring((settingsPack ? 0ull : kSettingsAi.bytes) + runtimeBytes) +
-            L",\"downloading\":" +
-            (settingsAiDownloading_ ? L"true" : L"false") + L"}";
     json += std::wstring(L",\"runtime\":{\"installed\":") +
             (tekito::userdata::AiRuntimeInstalled(AiDataRoot()) ? L"true" : L"false") +
             L",\"bytes\":" + std::to_wstring(kAiRuntime.bytes) + L",\"windowsMl\":" +

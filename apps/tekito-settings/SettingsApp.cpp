@@ -350,20 +350,6 @@ LRESULT CALLBACK SettingsApp::WindowProc(HWND hwnd, UINT message, WPARAM wParam,
         self->FinishWindowsMlInstall(static_cast<tekito::userdata::AiModelInstallError>(wParam), static_cast<int>(lParam));
         return 0;
     }
-    if (message == kAiScored) {
-        std::unique_ptr<ScoredAsk> ask(reinterpret_cast<ScoredAsk*>(lParam));
-        std::wstring scores = L",\"scores\":[";
-        for (std::size_t i = 0; i < ask->scores.size(); ++i) {
-            if (i) scores += L',';
-            wchar_t number[32];
-            swprintf_s(number, L"%.4f", ask->scores[i]);
-            scores += number;
-        }
-        scores += L']';
-        self->Reply(ask->requestId, ask->ok, ask->ok ? L"" : self->Text(L"AI did not answer.", L"AI から答えがありませんでした。"),
-                    ask->ok ? scores : std::wstring{});
-        return 0;
-    }
     if (message == kJapaneseDataInstalled) {
         self->FinishJapaneseDataInstall(static_cast<tekito::userdata::AiModelInstallError>(wParam));
         return 0;
