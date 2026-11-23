@@ -74,7 +74,7 @@ constexpr int kNumberGap = 10;
 constexpr int kRowPaddingRight = 14;
 constexpr int kTagGap = 10;
 constexpr int kTagPaddingX = 7;
-constexpr int kTagHeight = 18;
+constexpr int kTagHeight = 16;
 constexpr float kTagTracking = 0.6f;
 constexpr int kIndicatorGutter = 8;
 constexpr int kIndicatorWidth = 3;
@@ -124,9 +124,9 @@ constexpr int kEdgeDepth = 2;
 constexpr int kRecessDepth = 4;
 constexpr int kLightSpread = 22;
 
-constexpr float kFontCandidate = 15.0f;
-constexpr float kFontNumber = 12.5f;
-constexpr float kFontTag = 9.5f;
+constexpr float kFontCandidate = 14.0f;
+constexpr float kFontNumber = 12.0f;
+constexpr float kFontTag = 9.0f;
 constexpr float kFontDetail = 12.5f;
 // The keys typed, small above the list (UserSettings::showTypedKeys).
 constexpr float kFontCaption = 12.0f;
@@ -572,6 +572,8 @@ struct TextFormats {
     winrt::com_ptr<IDWriteTextFormat> detail;
     winrt::com_ptr<IDWriteTextFormat> icon;
     winrt::com_ptr<IDWriteTextFormat> caption;
+    // How far down the numbers go to share the candidates' baseline.
+    float numberShift{0.0f};
 };
 
 struct Layout {
@@ -956,9 +958,10 @@ void DrawRows(ID2D1RenderTarget* target, IDWriteFactory* factory, const TextForm
         const D2D1_RECT_F numberRect =
             D2D1::RectF(numberLeft, rect.top, numberLeft + layout.numberWidth, rect.bottom);
         if (formats.number) {
+            const D2D1_RECT_F onBaseline = D2D1::RectF(numberRect.left, numberRect.top + formats.numberShift,
+                                                        numberRect.right, numberRect.bottom + formats.numberShift);
             target->DrawText(row.number.c_str(), static_cast<UINT32>(row.number.size()),
-                             formats.number.get(), numberRect, mutedBrush.get(),
-                             D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                             formats.number.get(), onBaseline, mutedBrush.get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
         }
 
         D2D1_RECT_F textRect = D2D1::RectF(numberRect.right + layout.numberGap, rect.top,
@@ -967,9 +970,10 @@ void DrawRows(ID2D1RenderTarget* target, IDWriteFactory* factory, const TextForm
             if (auto tag = TagLayout(factory, formats.tag.get(), row.label, layout.tagHeight,
                                      layout.tagTracking)) {
                 const float tagWidth = LayoutWidth(tag.get()) + 2.0f * layout.tagPaddingX;
-                const float tagTop = std::round(rect.top + (layout.rowHeight - layout.tagHeight) / 2.0f);
-                const D2D1_RECT_F tagRect = D2D1::RectF(textRect.right - tagWidth, tagTop,
-                                                        textRect.right, tagTop + layout.tagHeight);
+                const float inset = std::round((layout.rowHeight - layout.tagHeight) / 2.0f);
+                const float tagTop = rect.top + inset;
+                const float tagRight = rect.right - inset;
+                const D2D1_RECT_F tagRect = D2D1::RectF(tagRight - tagWidth, tagTop, tagRight, tagTop + layout.tagHeight);
                 target->FillRoundedRectangle(Rounded(tagRect, layout.tagHeight / 2.0f), tagBrush.get());
                 target->DrawTextLayout(D2D1::Point2F(tagRect.left + layout.tagPaddingX, tagRect.top),
                                        tag.get(), mutedBrush.get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
@@ -1631,10 +1635,28 @@ private:
         formats_.dpi = dpi;
         formats_.text = CreateFormat(f, brand, kFontCandidate * scale, DWRITE_FONT_WEIGHT_NORMAL,
                                      DWRITE_TEXT_ALIGNMENT_LEADING, true);
-        formats_.textSelected = CreateFormat(f, brand, kFontCandidate * scale, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+        formats_.textSelected = CreateFormat(f, brand, kFontCandidate * scale, DWRITE_FONT_WEIGHT_MEDIUM,
                                              DWRITE_TEXT_ALIGNMENT_LEADING, true);
-        formats_.number = CreateFormat(f, brand, kFontNumber * scale, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+        formats_.number = CreateFormat(f, brand, kFontNumber * scale, DWRITE_FONT_WEIGHT_NORMAL,
                                        DWRITE_TEXT_ALIGNMENT_TRAILING, false);
+        // The numbers sit on the candidates' baseline, not each centred in
+        // the row by its own size.
+        formats_.numberShift = 0.0f;
+        const auto lineOf = [&](IDWriteTextFormat* format) -> std::pair<float, float> {
+            winrt::com_ptr<IDWriteTextLayout> layout;
+            DWRITE_LINE_METRICS line{};
+            UINT32 lines = 0;
+            if (!format || FAILED(f->CreateTextLayout(L"1\x3042", 2, format, 1000.0f, 1000.0f, layout.put())) ||
+                FAILED(layout->GetLineMetrics(&line, 1, &lines)) || lines == 0) {
+                return {0.0f, 0.0f};
+            }
+            return {line.height, line.baseline};
+        };
+        const auto [textHeight, textBaseline] = lineOf(formats_.text.get());
+        const auto [numberHeight, numberBaseline] = lineOf(formats_.number.get());
+        if (textHeight > 0.0f && numberHeight > 0.0f) {
+            formats_.numberShift = (textBaseline - textHeight / 2.0f) - (numberBaseline - numberHeight / 2.0f);
+        }
         formats_.tag = CreateFormat(f, brand, kFontTag * scale, DWRITE_FONT_WEIGHT_BOLD,
                                     DWRITE_TEXT_ALIGNMENT_LEADING, false);
         formats_.caption = CreateFormat(f, brand, kFontCaption * scale, DWRITE_FONT_WEIGHT_NORMAL,
@@ -2421,8 +2443,7 @@ void CandidateWindow::Show(const RECT& caretRect,
         const auto index = pageStart_ + row;
         const auto& candidate = candidates_[index];
         const auto displayId = candidate.id == 0 ? index + 1 : candidate.id;
-        // Digit keys choose the first nine: no number past them.
-        frame.rows.push_back({displayId <= 9 ? std::to_wstring(displayId) : std::wstring{}, candidate.text, LabelText(candidate, japanese_), candidate.hasMeaning,
+        frame.rows.push_back({std::to_wstring(displayId), candidate.text, LabelText(candidate, japanese_), candidate.hasMeaning,
                               candidate.groupStart && row > 0});
     }
     if (selectedIndex_ >= pageStart_ && selectedIndex_ - pageStart_ < visibleCount_) {

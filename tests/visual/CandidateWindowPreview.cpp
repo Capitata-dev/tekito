@@ -29,6 +29,9 @@
 #include "Tsf/CandidateWindow.h"
 
 #include <windows.h>
+
+#include <fstream>
+#include <string>
 #include <dwmapi.h>
 #include <cstdio>
 #include <cwchar>
@@ -247,6 +250,68 @@ std::vector<tekito::Candidate> SampleKanjiCandidates() {
     };
 }
 
+// A list from a UTF-8 file (`list <file>`): a line for each candidate,
+// its text, then after tabs a tag (suggestion, emoji, original) and m when
+// it has a meaning; "#selected N", "#page N" (the first row shown), "#rows N"
+// and "#detail headword|sense|sense" set the rest.
+struct FileList {
+    std::vector<tekito::Candidate> candidates;
+    std::size_t selected{0}, pageStart{0}, rows{12};
+    tekito::tsf::CandidateDetail detail;
+};
+
+std::wstring FromUtf8(const std::string& text) {
+    if (text.empty()) return {};
+    const int size = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    std::wstring out(static_cast<std::size_t>(size), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), out.data(), size);
+    return out;
+}
+
+FileList ReadList(const wchar_t* path) {
+    FileList list;
+    std::ifstream in(path, std::ios::binary);
+    std::uint32_t id = 1;
+    for (std::string raw; std::getline(in, raw);) {
+        if (!raw.empty() && raw.back() == '\r') raw.pop_back();
+        const std::wstring line = FromUtf8(raw);
+        if (line.empty()) continue;
+        if (line.rfind(L"#selected ", 0) == 0) list.selected = std::stoul(line.substr(10));
+        else if (line.rfind(L"#page ", 0) == 0) list.pageStart = std::stoul(line.substr(6));
+        else if (line.rfind(L"#rows ", 0) == 0) list.rows = std::stoul(line.substr(6));
+        else if (line.rfind(L"#detail ", 0) == 0) {
+            std::wstring rest = line.substr(8);
+            std::vector<std::wstring> parts;
+            for (std::size_t at = 0;;) {
+                const std::size_t bar = rest.find(L'|', at);
+                parts.push_back(rest.substr(at, bar == std::wstring::npos ? std::wstring::npos : bar - at));
+                if (bar == std::wstring::npos) break;
+                at = bar + 1;
+            }
+            list.detail.headword = parts.front();
+            list.detail.senses.assign(parts.begin() + 1, parts.end());
+        } else {
+            std::vector<std::wstring> fields;
+            for (std::size_t at = 0;;) {
+                const std::size_t tab = line.find(L'\t', at);
+                fields.push_back(line.substr(at, tab == std::wstring::npos ? std::wstring::npos : tab - at));
+                if (tab == std::wstring::npos) break;
+                at = tab + 1;
+            }
+            const std::wstring tag = fields.size() > 1 ? fields[1] : L"";
+            const auto label = tag == L"suggestion" ? tekito::SemanticLabel::Suggestion
+                               : tag == L"emoji"    ? tekito::SemanticLabel::Emoji
+                                                    : tekito::SemanticLabel::None;
+            auto candidate = MakeCandidate(fields[0].c_str(), label, 0, tag == L"original");
+            candidate.id = id;
+            id = id % static_cast<std::uint32_t>(std::max<std::size_t>(list.rows, 1)) + 1;
+            candidate.hasMeaning = fields.size() > 2 && fields[2] == L"m";
+            list.candidates.push_back(std::move(candidate));
+        }
+    }
+    return list;
+}
+
 // A Japanese list longer than a page (こうえん), shown a page of twelve.
 std::vector<tekito::Candidate> SamplePageCandidates() {
     using tekito::SemanticLabel;
@@ -331,6 +396,7 @@ int wmain(int argc, wchar_t** argv) {
     bool form = false;
     bool kanji = false;
     bool page = false;
+    const wchar_t* listFile = nullptr;
     bool chunks = false;
     int badge = 0;
     // The keys typed shown above the list, or alone.
@@ -348,6 +414,7 @@ int wmain(int argc, wchar_t** argv) {
         if (wcscmp(argv[i], L"kanji-list") == 0) kanji = true;
         // A page of twelve Japanese candidates, as Japanese mode shows.
         if (wcscmp(argv[i], L"page") == 0) page = true;
+        if (wcscmp(argv[i], L"list") == 0 && i + 1 < argc) listFile = argv[++i];
         if (wcscmp(argv[i], L"chunks") == 0) chunks = true;
         if (wcscmp(argv[i], L"doc") == 0) g_documentBackdrop = true;
         if (wcscmp(argv[i], L"dusk") == 0) g_duskBackdrop = true;
@@ -420,6 +487,11 @@ int wmain(int argc, wchar_t** argv) {
                                                  : tekito::InputMode::Convert);
     } else if (captionOnly) {
         window.Show(caret, {}, tekito::tsf::CandidateWindow::kNoSelection, 0, 0, {}, caption);
+    } else if (listFile) {
+        auto list = ReadList(listFile);
+        // The ids number each page from 1.
+        const std::size_t rows = std::min(list.rows, list.candidates.size() - list.pageStart);
+        window.Show(caret, list.candidates, list.selected, list.pageStart, rows, list.detail, caption);
     } else if (page) {
         window.Show(caret, candidates, 0, 0, 12, detail, caption);
     } else {
