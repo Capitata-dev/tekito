@@ -2297,6 +2297,39 @@ void TestKanjiSets() {
     Require(sets.VariantForms(L"高崎", 2).size() == 2, "at most as many as asked");
     Require(sets.VariantForms(L"吉野", 6) == std::vector<std::wstring>{L"𠮷野"}, "variants outside the BMP");
     Require(sets.VariantForms(L"たかはし", 6).empty(), "kana has none");
+
+    // 旧字体 and the other variants (異体字), told apart for the list's tags.
+    using Kind = tekito::japanese::KanjiSets::VariantKind;
+    sets.Add(U'国', 2);
+    sets.Add(U'高', 2);
+    sets.Add(U'崎', 4);
+    sets.AddVariants(U'国', U"國圀");
+    sets.AddVariants(U'國', U"国");
+    sets.AddVariants(U'圀', U"国");
+    sets.AddVariants(U'髙', U"高");
+    sets.AddVariants(U'﨑', U"崎");
+    sets.AddOldForms(U'国', U"國");
+    sets.AddOldForms(U'桜', U"櫻");
+    const auto standard = [&](std::wstring_view text) {
+        const auto form = sets.StandardForm(text);
+        return form ? form->text + (form->kind == Kind::Old ? L":old" : L":other") : std::wstring(L"-");
+    };
+    RequireText(standard(L"國"), L"国:old", "國 is 国's old form");
+    RequireText(standard(L"櫻井"), L"桜井:old", "an old form that is 人名用 too");
+    RequireText(standard(L"圀"), L"国:other", "圀 is another variant");
+    RequireText(standard(L"髙﨑"), L"高崎:other", "髙 and 﨑 are other variants");
+    RequireText(standard(L"高崎"), L"-", "常用 kanji stay");
+
+    using Row = tekito::japanese::CandidateList::Row;
+    std::vector<Row> rows(4);
+    rows[0].text = L"国";
+    rows[1].text = L"國";
+    rows[2].text = L"圀";
+    rows[3].text = L"櫻";
+    tekito::japanese::MarkVariantForms(rows, &sets);
+    Require(!rows[0].oldForm && !rows[0].variantForm && rows[1].oldForm && rows[2].variantForm,
+            "the list tags 國 旧字体 and 圀 異体字 beside 国");
+    Require(!rows[3].oldForm && !rows[3].variantForm, "but not 櫻 with no 桜 in the list");
 }
 
 void TestMeanings() {

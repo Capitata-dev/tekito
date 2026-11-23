@@ -137,6 +137,7 @@ const JapaneseData* ProcessJapaneseData() {
         (void)loaded->loanwords.OpenEnglish(ExternalLexiconProvider::PackDirectory(L"japanese-english"));
         (void)loaded->kanjiSets.Load(ExternalLexiconProvider::PackDirectory(L"kanji-sets") / L"kanji.tsv");
         (void)loaded->kanjiSets.LoadVariants(ExternalLexiconProvider::PackDirectory(L"japanese-variants") / L"variants.tsv");
+        (void)loaded->kanjiSets.LoadOldForms(ExternalLexiconProvider::PackDirectory(L"japanese-variants") / L"old-forms.tsv");
         if (loaded->notation.Open(ExternalLexiconProvider::PackDirectory(L"japanese-notation"))) {
             loaded->converter->SetNotation(&loaded->notation);
         }

@@ -474,8 +474,9 @@ int main(int argc, char** argv) {
         if (sentences) composer.ShowCandidates();
         if (const auto* list = composer.FocusedCandidates()) {
             // With the tags the list shows: [?] a maybe, [=] as typed,
-            // [S] slang, [R] taking out a word typed twice, [F] and [H]
-            // full- and half-width.
+            // [S] slang, [R] taking out a word typed twice, [O] and [V] an
+            // old form and another variant of a kanji, [F] and [H] full-
+            // and half-width.
             std::vector<tekito::japanese::CandidateList::Row> tagged;
             for (const auto& candidate : *list) {
                 tekito::japanese::CandidateList::Row row;
@@ -487,10 +488,12 @@ int main(int argc, char** argv) {
                 tagged.push_back(std::move(row));
             }
             tekito::japanese::MarkWidths(tagged);
+            tekito::japanese::MarkVariantForms(tagged, composer.KanjiSetsInUse());
             using Width = tekito::japanese::CandidateList::Row::Width;
             for (std::size_t i = 0; i < list->size() && i < rows; ++i) {
                 const auto& row = tagged[i];
                 const char* tag = row.repeat ? "[R]" : row.suggestion ? "[?]" : row.asTyped ? "[=]" : row.slang ? "[S]"
+                                  : row.oldForm ? "[O]" : row.variantForm ? "[V]"
                                   : row.width == Width::Full ? "[F]" : row.width == Width::Half ? "[H]" : "";
                 std::cout << (i ? " | " : "") << ((*list)[i].chunk ? "^" : "") << Narrow((*list)[i].text) << tag;
             }

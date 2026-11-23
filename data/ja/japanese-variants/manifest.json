@@ -2,14 +2,19 @@
   "pack_id": "japanese-variants",
   "display_name": "Kanji Variant Forms",
   "schema_version": 1,
-  "version": "2026.10",
+  "version": "2026.11",
   "language": "ja-JP",
   "type": "japanese-variants",
   "format": "tsv",
   "file": "variants.tsv",
+  "files": [
+    "variants.tsv",
+    "old-forms.tsv"
+  ],
   "entry_count": 2158,
   "sha256": {
-    "file": "B54B2164D9D78FAAEDF01FE885053E895187C77834DAC622DA5ED8AE343837B5"
+    "file": "B54B2164D9D78FAAEDF01FE885053E895187C77834DAC622DA5ED8AE343837B5",
+    "old-forms": "B7F7BE5CE7D76C3E8447C1585C1C5031EA036BDF33D640F6EC680C0BCB6FE3D5"
   },
   "license": "Unicode-3.0 (Unihan) + public domain (SKK-JISYO.itaiji)",
   "ai_training": true,

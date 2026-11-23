@@ -941,6 +941,10 @@ void TextService::ShowJapaneseCandidates(ITfContext* context, TfEditCookie editC
             row.isOriginal = true;
         } else if (list.rows[i].slang) {
             row.label = SemanticLabel::Slang;
+        } else if (list.rows[i].oldForm) {
+            row.label = SemanticLabel::OldForm;
+        } else if (list.rows[i].variantForm) {
+            row.label = SemanticLabel::VariantForm;
         } else if (list.rows[i].width != Width::None) {
             row.label = list.rows[i].width == Width::Full ? SemanticLabel::FullWidth : SemanticLabel::HalfWidth;
         }

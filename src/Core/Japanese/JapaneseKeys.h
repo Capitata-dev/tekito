@@ -146,6 +146,10 @@ struct CandidateList {
         // out a word typed twice.
         bool slang{false};
         bool repeat{false};
+        // A kanji written another way: its old form (旧字体), another
+        // variant (異体字).
+        bool oldForm{false};
+        bool variantForm{false};
         // The same as another row but for its width: the wider or the
         // narrower of the two (None: no such row).
         enum class Width : std::uint8_t { None, Full, Half };
@@ -180,6 +184,11 @@ struct ListPage {
 
 // Marks the rows the same as another but for width (Row::width).
 void MarkWidths(std::vector<CandidateList::Row>& rows);
+// Marks the rows that write a kanji another way than a row in the list
+// (國 beside 国, 渡邊 beside 渡辺): its old form (旧字体) or another
+// variant (異体字). A word whose kanji has no plainer form listed beside it
+// (叛乱) is not marked.
+void MarkVariantForms(std::vector<CandidateList::Row>& rows, const KanjiSets* sets);
 
 [[nodiscard]] CandidateList CandidateListFor(const JapaneseComposer& composer, std::size_t pageSize);
 

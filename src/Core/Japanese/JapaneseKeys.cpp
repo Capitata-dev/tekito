@@ -1,8 +1,10 @@
 #include "Core/Japanese/JapaneseKeys.h"
 
 #include "Core/Japanese/KanaText.h"
+#include "Core/Japanese/KanjiSets.h"
 
 #include <algorithm>
+#include <unordered_set>
 
 namespace tekito::japanese {
 namespace {
@@ -407,6 +409,18 @@ KeyOutcome ApplyKey(JapaneseComposer& composer, const KeyCommand& command) {
 // and コウエン): the full-width ASCII one is the wider, the half-width
 // katakana one and the ASCII one beside a full-width twin the narrower.
 // Katakana and hiragana as usually written take no mark.
+void MarkVariantForms(std::vector<CandidateList::Row>& rows, const KanjiSets* sets) {
+    if (!sets || !sets->HasVariants()) return;
+    std::unordered_set<std::wstring> texts;
+    for (const auto& row : rows) texts.insert(row.text);
+    for (auto& row : rows) {
+        const auto standard = sets->StandardForm(row.text);
+        if (!standard || !texts.contains(standard->text)) continue;
+        row.oldForm = standard->kind == KanjiSets::VariantKind::Old;
+        row.variantForm = !row.oldForm;
+    }
+}
+
 void MarkWidths(std::vector<CandidateList::Row>& rows) {
     using Width = CandidateList::Row::Width;
     const auto has = [](const std::wstring& text, wchar_t from, wchar_t to) {
@@ -469,6 +483,7 @@ CandidateList CandidateListFor(const JapaneseComposer& composer, std::size_t pag
                              candidate.slang, candidate.repeat});
     }
     MarkWidths(list.rows);
+    MarkVariantForms(list.rows, composer.KanjiSetsInUse());
     const std::size_t selected = std::min(composer.FocusedSelection(), candidates->size() - 1);
     list.selected = selected;
     const auto page = ListPageOf(selected, list.rows.size(), pageSize);

@@ -77,6 +77,56 @@ bool KanjiSets::LoadVariants(const std::filesystem::path& file) {
     return HasVariants();
 }
 
+bool KanjiSets::LoadOldForms(const std::filesystem::path& file) {
+    std::ifstream input(file, std::ios::binary);
+    if (!input) return false;
+    for (std::string line; std::getline(input, line);) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const auto tab = line.find('\t');
+        if (line.empty() || line[0] == '#' || tab == std::string::npos || tab + 1 >= line.size()) continue;
+        AddOldForms(FirstCodePoint(std::string_view(line).substr(0, tab)), CodePoints(std::string_view(line).substr(tab + 1)));
+    }
+    return !newForms_.empty();
+}
+
+void KanjiSets::AddOldForms(char32_t kanji, std::u32string oldForms) {
+    for (const char32_t old : oldForms) newForms_.emplace(old, kanji);
+}
+
+std::optional<KanjiSets::StandardText> KanjiSets::StandardForm(std::wstring_view text) const {
+    if (variants_.empty()) return std::nullopt;
+    StandardText standard;
+    bool changed = false;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        char32_t c = text[i];
+        std::size_t width = 1;
+        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < text.size()) {
+            c = 0x10000 + ((c - 0xD800) << 10) + (text[i + 1] - 0xDC00);
+            width = 2;
+        }
+        i += width - 1;
+        char32_t replaced = c;
+        if (const auto found = newForms_.find(c); found != newForms_.end()) {
+            replaced = found->second;
+        } else if (const auto level = levels_.find(c); level == levels_.end() || level->second > 8) {
+            // Not 常用: the first 常用 kanji it is a variant of.
+            if (const auto found = variants_.find(c); found != variants_.end()) {
+                for (const char32_t variant : found->second) {
+                    if (const auto other = levels_.find(variant); other != levels_.end() && other->second <= 8) {
+                        replaced = variant;
+                        standard.kind = VariantKind::Other;
+                        break;
+                    }
+                }
+            }
+        }
+        changed = changed || replaced != c;
+        AppendUtf16(standard.text, replaced);
+    }
+    if (!changed) return std::nullopt;
+    return standard;
+}
+
 std::vector<std::wstring> KanjiSets::VariantForms(std::wstring_view text, std::size_t most) const {
     std::vector<std::wstring> forms;
     if (variants_.empty()) return forms;

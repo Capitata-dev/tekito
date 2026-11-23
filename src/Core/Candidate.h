@@ -21,6 +21,10 @@ enum class SemanticLabel {
     // and KOUEN): which of the two it is.
     FullWidth,
     HalfWidth,
+    // A kanji written another way: its old form (旧字体), another variant
+    // (異体字).
+    OldForm,
+    VariantForm,
 };
 
 enum CandidatePolicyFlags : std::uint32_t {

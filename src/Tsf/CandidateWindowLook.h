@@ -551,6 +551,9 @@ inline std::wstring LabelText(const Candidate& candidate, bool japanese, bool or
     if (candidate.isOriginal) return originalFirst ? std::wstring{} : japanese ? L"そのまま" : L"ORIGINAL";
     // Slang offered for what was typed.
     if (candidate.label == SemanticLabel::Slang) return japanese ? L"スラング" : L"SLANG";
+    // A kanji written another way, which is easy to miss.
+    if (candidate.label == SemanticLabel::OldForm) return japanese ? L"旧字体" : L"OLD FORM";
+    if (candidate.label == SemanticLabel::VariantForm) return japanese ? L"異体字" : L"VARIANT";
     // The same as another row but for width, which is hard to see.
     if (candidate.label == SemanticLabel::FullWidth) return japanese ? L"全角" : L"FULL-WIDTH";
     if (candidate.label == SemanticLabel::HalfWidth) return japanese ? L"半角" : L"HALF-WIDTH";

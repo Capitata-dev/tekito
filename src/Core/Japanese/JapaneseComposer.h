@@ -146,6 +146,7 @@ public:
     }
     // Candidates use only kanji in `range` (教育, 常用, 人名用 from `sets`).
     void SetKanjiSets(const KanjiSets* sets) noexcept { kanjiSets_ = sets; }
+    [[nodiscard]] const KanjiSets* KanjiSetsInUse() const noexcept { return kanjiSets_; }
     void SetKanjiRange(KanjiRange range, int grade = 6, bool names = false) noexcept {
         kanjiRange_ = range;
         kanjiGrade_ = grade;
