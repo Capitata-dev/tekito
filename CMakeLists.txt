@@ -183,6 +183,12 @@ target_link_options(Tekito.Tsf PRIVATE /DELAYLOAD:d3d11.dll /DELAYLOAD:CoreMessa
 add_executable(TEKITO WIN32
     apps/tekito/main.cpp
     apps/tekito-settings/main.cpp
+    apps/tekito-settings/SettingsApp.cpp
+    apps/tekito-settings/SettingsState.cpp
+    apps/tekito-settings/SettingsRequests.cpp
+    apps/tekito-settings/SettingsWords.cpp
+    apps/tekito-settings/SettingsDownloads.cpp
+    apps/tekito-settings/SettingsFiles.cpp
     apps/tekito-settings/Companion.cpp
     assets/tekito_app.rc
 )
