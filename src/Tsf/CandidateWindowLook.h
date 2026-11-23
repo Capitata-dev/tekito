@@ -142,8 +142,10 @@ constexpr float kFontDetail = 12.5f;
 // The keys typed, small above the list (UserSettings::showTypedKeys).
 constexpr float kFontCaption = 12.0f;
 constexpr int kCaptionHeight = 20;
-// The page shown of how many ("1 / 3"), small under the rows.
-constexpr int kFooterHeight = 20;
+// The page shown of how many ("1 / 3"), small under the rows, a gap apart
+// from them so it does not read as one more row.
+constexpr int kFooterGap = 10;
+constexpr int kFooterHeight = 20 + kFooterGap;
 // The dictionary sign on rows with a meaning: the open book ("ReadingMode")
 // of the Windows icon font, which reads as a book even this small.
 constexpr float kFontIcon = 13.0f;
@@ -339,6 +341,8 @@ constexpr SelectionStyle kSimpleDarkSelection{
 constexpr int kSimpleCornerRadius = 12;
 constexpr int kSimpleRowRadius = 8;
 constexpr int kSimpleRailWidth = 3;
+// Unnumbered rows (the columns): room between the rail and the text.
+constexpr int kRailClearance = 8;
 
 struct Style {
     Palette palette{kLightPalette};
@@ -999,15 +1003,22 @@ inline void DrawRows(ID2D1RenderTarget* target, IDWriteFactory* factory, const T
     }
 }
 
-// The page shown of how many, small and muted under the rows at their end.
+// The page shown of how many, small and muted under the rows at their end,
+// past a gap with a faint line.
 inline void DrawPage(ID2D1RenderTarget* target, const TextFormats& formats, const Layout& layout, const Frame& frame,
               const Style& style) {
     if (layout.footerHeight <= 0.0f || frame.pages < 2 || !formats.page) return;
     const std::wstring text = std::to_wstring(frame.page + 1) + L" / " + std::to_wstring(frame.pages);
     auto muted = SolidBrush(target, style.palette.mutedText);
     const float bottom = layout.listHeight - layout.padding;
-    const D2D1_RECT_F rect = D2D1::RectF(layout.padding + layout.rowPaddingLeft, bottom - layout.footerHeight,
+    const float gap = kFooterGap * layout.scale;
+    const D2D1_RECT_F rect = D2D1::RectF(layout.padding + layout.rowPaddingLeft, bottom - layout.footerHeight + gap,
                                          layout.rowRight - layout.rowPaddingRight, bottom);
+    // A faint line across, in the gap, sets it apart from the rows.
+    auto line = SolidBrush(target, WithAlpha(style.palette.mutedText, style.palette.mutedText.a * 0.25f));
+    const float y = std::round(bottom - layout.footerHeight + gap / 2.0f) + 0.5f;
+    target->DrawLine(D2D1::Point2F(layout.padding + layout.rowPaddingLeft, y),
+                     D2D1::Point2F(layout.rowRight - layout.rowPaddingRight, y), line.get(), std::max(1.0f, std::round(layout.scale)));
     target->DrawText(text.c_str(), static_cast<UINT32>(text.size()), formats.page.get(), rect, muted.get(),
                      D2D1_DRAW_TEXT_OPTIONS_NONE);
 }

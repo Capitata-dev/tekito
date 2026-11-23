@@ -447,7 +447,9 @@ private:
         if (columns) {
             l.columnRows = frame.columnRows;
             l.numberWidth = 0.0f;
-            l.numberGap = 0.0f;
+            // The simple style's rail stands where a number would: the
+            // text keeps clear of it, as the number does on the first page.
+            l.numberGap = frame.style == 1 ? static_cast<float>(ScaleForWindow(panel_, kRailClearance)) : 0.0f;
         }
         // Candidate length varies a lot (a single emoji vs. a long phrase), so
         // the panel is sized to the widest visible row. Measured in the
