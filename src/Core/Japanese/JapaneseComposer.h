@@ -738,7 +738,12 @@ private:
     void ConvertJapaneseRuns();
     // The likeliest sentences the phrases' candidates make, checked as a
     // whole (SetSentenceReranker); the one taken is selected.
-    void CheckSentence();
+    // `typingOn`: while typing on, without the AI and without whole texts
+    // read with other breaks (those take longest).
+    void CheckSentence(bool typingOn = false);
+    // Live: the sentence so far checked before phrases stay as they show;
+    // whether it reads it otherwise than shown.
+    bool CheckBeforeSettling();
     // Each phrase's list ends with what was typed in every form: hiragana,
     // katakana, half-width katakana and the keys in full and half width
     // (what F6-F10 give), for people who look for them there.

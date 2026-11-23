@@ -1037,15 +1037,65 @@ void JapaneseComposer::UpdateLive() {
             phrase.selected = 0;
         }
     }
+    bool checked = false;
     if (phrases_.size() > settledPhrases_ + liveOpenPhrases_) {
-        settledPhrases_ = phrases_.size() - liveOpenPhrases_;
-        settledLength_ = phrases_[settledPhrases_ - 1].begin + phrases_[settledPhrases_ - 1].length;
+        // Before phrases stay as they show, the sentence so far is checked
+        // as a pause checks it, so they stay as it reads them (昨日NHKの
+        // ニュースを見た, not 機能NHKの), Enter committing them as shown.
+        checked = CheckBeforeSettling();
+        if (phrases_.size() > liveOpenPhrases_) {
+            settledPhrases_ = phrases_.size() - liveOpenPhrases_;
+            settledLength_ = phrases_[settledPhrases_ - 1].begin + phrases_[settledPhrases_ - 1].length;
+        }
     }
     for (auto& phrase : phrases_) KeepKanjiInRange(phrase);
-    KeepLiveSteady(reading);
+    // What the check changed shows, not what showed before it.
+    if (checked) {
+        RememberLiveShown();
+    } else {
+        KeepLiveSteady(reading);
+    }
     preview_ = true;
     focus_ = phrases_.size() - 1;
     listOpen_ = false;
+}
+
+bool JapaneseComposer::CheckBeforeSettling() {
+    if (!liveRefine_ || !reranker_ || !sentenceCheck_ || chunkJudge_ || reconverted_ || phrases_.empty()) return false;
+    const std::wstring reading = conversionReading_;
+    // The check's choices, each its phrase's first: nothing was picked.
+    auto kept = phrases_;
+    CheckSentence(true);
+    // A reading of the whole input another way: as it was. Other breaks
+    // of the same reading stay (昨日|NHKの, where it read 機能|NHK|の).
+    const bool covers = !phrases_.empty() && phrases_.back().begin + phrases_.back().length == reading.size();
+    if (conversionReading_ != reading || !covers) {
+        phrases_ = std::move(kept);
+        conversionReading_ = reading;
+        return false;
+    }
+    for (auto& phrase : phrases_) {
+        if (phrase.form || phrase.selected == 0 || phrase.selected >= phrase.candidates.size()) continue;
+        std::rotate(phrase.candidates.begin(), phrase.candidates.begin() + static_cast<std::ptrdiff_t>(phrase.selected),
+                    phrase.candidates.begin() + static_cast<std::ptrdiff_t>(phrase.selected) + 1);
+        phrase.selected = 0;
+    }
+    // Only the phrases about to stay take what the check read; the ones
+    // still being typed on show as converted (the words after them are
+    // not there yet: 図書館, not 図書感), where they break the same.
+    const std::size_t staying = phrases_.size() > liveOpenPhrases_ ? phrases_.size() - liveOpenPhrases_ : 0;
+    for (std::size_t i = staying; i < phrases_.size(); ++i) {
+        const auto same = std::find_if(kept.begin(), kept.end(), [&](const PhraseState& k) {
+            return k.begin == phrases_[i].begin && k.length == phrases_[i].length;
+        });
+        if (same != kept.end()) phrases_[i] = *same;
+    }
+    // Whether it reads the text otherwise than shown.
+    if (phrases_.size() != kept.size()) return true;
+    for (std::size_t i = 0; i < phrases_.size(); ++i) {
+        if (phrases_[i].begin != kept[i].begin || PhraseText(phrases_[i]) != PhraseText(kept[i])) return true;
+    }
+    return false;
 }
 
 bool JapaneseComposer::RefineLive() {
@@ -2553,7 +2603,7 @@ void JapaneseComposer::JoinEllipsis() {
     }
 }
 
-void JapaneseComposer::CheckSentence() {
+void JapaneseComposer::CheckSentence(bool typingOn) {
     lastChecked_.clear();
     lastCheckedSentences_ = {};
     if (phrases_.empty() || (!phrases_.front().candidates.empty() && !phrases_.front().candidates.front().reading.empty())) {
@@ -2668,7 +2718,7 @@ void JapaneseComposer::CheckSentence() {
     // Not when learning put a phrase's choice first: that stays.
     std::vector<SentenceGuess> guesses;
     const bool learned = std::any_of(phrases_.begin(), phrases_.end(), [](const PhraseState& p) { return p.learned; });
-    if (converter_ && wholeSentences_ > 0 && !learned) {
+    if (converter_ && wholeSentences_ > 0 && !learned && !typingOn) {
         SyncEdgeContext();
         guesses = converter_->BestSentences(conversionReading_, wholeSentences_, context_, userDictionary_);
     }
@@ -2694,7 +2744,7 @@ void JapaneseComposer::CheckSentence() {
         for (const auto& candidate : phrases_[i].candidates) checked.all.push_back(candidate.text);
     }
     std::wstring written;
-    const auto picks = ReadBest(parts, sentencesByCost_ ? &deltas : nullptr, !chunkJudge_, &written, wholes, signals);
+    const auto picks = ReadBest(parts, sentencesByCost_ ? &deltas : nullptr, !typingOn && !chunkJudge_, &written, wholes, signals);
     if (!written.empty()) {
         // One of those: its phrases, where they break.
         const auto guess = std::find_if(guesses.begin(), guesses.end(),
