@@ -124,14 +124,33 @@ std::optional<KeyCommand> TranslateKey(const JapaneseComposer& composer, const K
             const std::size_t size = composer.FocusedCandidates()->size();
             const std::size_t at = composer.FocusedSelection();
             const auto page = ListPageOf(at, size, options.pageSize);
+            // Past the last page, round to the first, and back from the
+            // first to the last, as Space goes round: the text stays.
             if (key.key == Key::PageDown) {
                 const std::size_t next = page.start + page.count;
-                if (next >= size) break;
-                return WithDelta(Action::NextCandidate, static_cast<int>(next - at));
+                if (page.pages <= 1) return Make(Action::Nothing);
+                return WithDelta(Action::NextCandidate, static_cast<int>(next >= size ? size - at : next - at));
             }
-            if (page.start == 0) break;
-            const auto before = ListPageOf(page.start - 1, size, options.pageSize);
-            return WithDelta(Action::PreviousCandidate, static_cast<int>(at - before.start));
+            if (page.pages <= 1) return Make(Action::Nothing);
+            const auto before = ListPageOf(page.start == 0 ? size - 1 : page.start - 1, size, options.pageSize);
+            return WithDelta(Action::PreviousCandidate,
+                             static_cast<int>(page.start == 0 ? at + size - before.start : at - before.start));
+        }
+        case Key::Home:
+        case Key::End: {
+            // The list open: its first or last candidate. Otherwise the
+            // first or last phrase, as in Microsoft IME; the text stays.
+            const auto* candidates = composer.IsCandidateListOpen() ? composer.FocusedCandidates() : nullptr;
+            if (candidates && !candidates->empty()) {
+                const std::size_t at = composer.FocusedSelection();
+                if (key.key == Key::Home) {
+                    return at == 0 ? Make(Action::Nothing) : WithDelta(Action::PreviousCandidate, static_cast<int>(at));
+                }
+                const std::size_t last = candidates->size() - 1;
+                return at >= last ? Make(Action::Nothing) : WithDelta(Action::NextCandidate, static_cast<int>(last - at));
+            }
+            if (key.shift) break;
+            return WithDelta(Action::MoveFocus, key.key == Key::Home ? -100000 : 100000);
         }
         case Key::Left:
         case Key::Right: {
@@ -142,9 +161,20 @@ std::optional<KeyCommand> TranslateKey(const JapaneseComposer& composer, const K
             if (!key.shift && candidates && composer.FocusedSelection() >= pageSize && candidates->size() > pageSize) {
                 const std::size_t at = composer.FocusedSelection();
                 if (key.key == Key::Right) {
-                    const std::size_t to = std::min(at + pageSize, candidates->size() - 1);
-                    // Past the last column, on to the first as Space goes.
-                    return WithDelta(Action::NextCandidate, static_cast<int>(to == at ? 1 : to - at));
+                    const std::size_t size = candidates->size();
+                    // The column on the right (the next page's first after
+                    // the third); a shorter one, its last row. With no
+                    // column on the right, round to the first page, as
+                    // Space goes: never down the same column.
+                    const auto columnOf = [&](std::size_t index) {
+                        const auto page = ListPageOf(index, size, pageSize);
+                        return page.index * kListColumns + (index - page.start) / pageSize;
+                    };
+                    if (at + pageSize < size) return WithDelta(Action::NextCandidate, static_cast<int>(pageSize));
+                    if (columnOf(size - 1) > columnOf(at)) {
+                        return WithDelta(Action::NextCandidate, static_cast<int>(size - 1 - at));
+                    }
+                    return WithDelta(Action::NextCandidate, static_cast<int>(size - at));
                 }
                 return WithDelta(Action::PreviousCandidate, static_cast<int>(std::min(at, pageSize)));
             }

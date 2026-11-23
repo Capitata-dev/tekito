@@ -786,6 +786,18 @@ void TestListColumns(const RomajiTable& table, const MiniPack& pack) {
     Require(hit(digit) && composer.IsCandidateListOpen() && composer.FocusedSelection() == 2,
             "a digit in the columns stays with the list");
     Require(hit(press(Key::Up)) && composer.FocusedSelection() == 1, "Up from the columns' top: the first page");
+    // The ends of the list go round, as Space does, and the text stays.
+    Require(hit(press(Key::End)) && composer.IsCandidateListOpen() && composer.FocusedSelection() == size - 1,
+            "End: the last candidate");
+    Require(hit(press(Key::Right)) && composer.IsCandidateListOpen() && composer.FocusedSelection() == 0,
+            "Right with no column on the right: round to the first page, not down the column");
+    Require(hit(press(Key::Home)) && composer.IsCandidateListOpen() && composer.FocusedSelection() == 0,
+            "Home: the first candidate");
+    const auto lastPage = tekito::japanese::ListPageOf(size - 1, size, options.pageSize);
+    Require(hit(press(Key::PageUp)) && composer.IsCandidateListOpen() && composer.FocusedSelection() == lastPage.start,
+            "PageUp from the first page: the last page");
+    Require(hit(press(Key::PageDown)) && composer.IsCandidateListOpen() && composer.FocusedSelection() == 0,
+            "PageDown from the last page: the first");
 }
 
 // What each key does in Japanese mode (JapaneseKeys.h), as the text service

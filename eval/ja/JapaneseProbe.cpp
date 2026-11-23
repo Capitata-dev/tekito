@@ -308,6 +308,7 @@ int main(int argc, char** argv) {
         const auto options = tekito::userdata::JapaneseKeyOptions(settings, mix);
         const bool showPhrases = std::find_if(argv + 3, argv + argc, [](const char* a) { return std::string(a) == "phrases"; }) != argv + argc;
         const bool showLearned = std::find_if(argv + 3, argv + argc, [](const char* a) { return std::string(a) == "learned"; }) != argv + argc;
+        const bool showList = std::find_if(argv + 3, argv + argc, [](const char* a) { return std::string(a) == "list"; }) != argv + argc;
         // "timing": how long each key took (its handling and what is shown
         // after it), in milliseconds, after the line.
         const bool timing = std::find_if(argv + 3, argv + argc, [](const char* a) { return std::string(a) == "timing"; }) != argv + argc;
@@ -334,10 +335,16 @@ int main(int argc, char** argv) {
                     const std::pair<std::wstring_view, Key> named[] = {
                         {L"{space}", Key::Space}, {L"{enter}", Key::Enter}, {L"{bs}", Key::Backspace}, {L"{esc}", Key::Escape},
                         {L"{left}", Key::Left}, {L"{right}", Key::Right}, {L"{f6}", Key::F6}, {L"{f7}", Key::F7},
-                        {L"{f8}", Key::F8}, {L"{f9}", Key::F9}, {L"{f10}", Key::F10}};
+                        {L"{f8}", Key::F8}, {L"{f9}", Key::F9}, {L"{f10}", Key::F10},
+                        {L"{up}", Key::Up}, {L"{down}", Key::Down}, {L"{tab}", Key::Tab},
+                        {L"{pgup}", Key::PageUp}, {L"{pgdn}", Key::PageDown}, {L"{home}", Key::Home},
+                        {L"{end}", Key::End}};
+                    // {s-...}: the same key with Shift.
+                    const std::wstring plain = name.starts_with(L"{s-") ? L"{" + name.substr(3) : name;
                     for (const auto& [text, key] : named) {
-                        if (name == text) press.key = key;
+                        if (plain == text) press.key = key;
                     }
+                    if (plain != name && name != L"{s-enter}") press.shift = true;
                     if (name == L"{pause}") {
                         (void)composer.RefineLive();
                         std::wstring shown;
@@ -385,6 +392,17 @@ int main(int argc, char** argv) {
                 // composition the text service would keep open.
                 std::cout << " " << Narrow(name) << ":" << Narrow(document) << "[" << Narrow(shown) << "]"
                           << (shown.empty() && composer.IsComposing() ? "(open)" : "");
+                // "list": with the candidate list open, the selected row and
+                // its page (columns from page 2).
+                if (showList && composer.IsCandidateListOpen()) {
+                    const auto list = tekito::japanese::CandidateListFor(composer, options.pageSize);
+                    if (!list.rows.empty() && list.selected) {
+                        const std::size_t selected = *list.selected;
+                        std::cout << "<" << selected << " p" << list.page + 1 << "/" << list.pages
+                                  << (list.columnRows ? " col" + std::to_string((selected - list.pageStart) / list.columnRows + 1) : std::string{})
+                                  << ">";
+                    }
+                }
             }
             std::cout << "\n";
             if (timing && !took.empty()) {
