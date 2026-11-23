@@ -23,12 +23,16 @@ bool LetterOdds::Open(const std::filesystem::path& packDirectory) {
     std::ifstream in(packDirectory / L"odds.tsv", std::ios::binary);
     if (!in) return false;
     std::vector<float> odds(kSymbols * kSymbols * kSymbols, 0.0f);
+    std::vector<bool> given(odds.size(), false);
     std::size_t rows = 0;
     for (std::string line; std::getline(in, line);) {
         if (line.size() < 5 || line[3] != '\t') continue;
         const int a = SymbolOf(line[0]), b = SymbolOf(line[1]), c = SymbolOf(line[2]);
         if (a < 0 || b < 0 || c < 0) continue;
-        odds[(a * kSymbols + b) * kSymbols + c] = std::strtof(line.c_str() + 4, nullptr);
+        const auto at = static_cast<std::size_t>((a * kSymbols + b) * kSymbols + c);
+        if (given[at]) return false;
+        given[at] = true;
+        odds[at] = std::strtof(line.c_str() + 4, nullptr);
         ++rows;
     }
     if (rows != odds.size()) return false;

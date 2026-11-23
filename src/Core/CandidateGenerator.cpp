@@ -260,7 +260,10 @@ void ProtectOriginal(std::vector<Candidate>& output, std::unordered_set<std::wst
                                  [](const Candidate& candidate) { return candidate.isOriginal; });
     if (original == output.end()) {
         AddOriginal(output, seen, raw);
-        original = output.end() - 1;
+        original = std::find_if(output.begin(), output.end(),
+                                [&](const Candidate& candidate) { return candidate.isOriginal || candidate.text == raw; });
+        if (original == output.end()) return;
+        original->isOriginal = true;
     }
     original->isProtected = true;
     original->policyFlags |= CandidatePolicyProtect;

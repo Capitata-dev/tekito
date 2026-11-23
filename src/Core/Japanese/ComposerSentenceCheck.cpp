@@ -699,6 +699,13 @@ std::vector<std::size_t> JapaneseComposer::ReadBest(const std::vector<std::vecto
             }
         }
     }
+    // What was chosen at last (the beam or the AI may have read another),
+    // as the sentences kept count it, so the chunk candidates measure by it.
+    if (chosen < sentences.size()) {
+        auto& last = lastCheckedSentences_;
+        const auto at = std::find(last.shown.begin(), last.shown.end(), sentences[chosen]);
+        if (at != last.shown.end()) last.chosen = static_cast<std::size_t>(at - last.shown.begin());
+    }
     if (chosen >= combined) {
         *written = sentences[chosen];
         return keep;

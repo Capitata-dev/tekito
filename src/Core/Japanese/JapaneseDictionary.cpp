@@ -2,6 +2,8 @@
 
 #include "Core/Japanese/KanaText.h"
 
+#include <limits>
+
 namespace tekito::japanese {
 namespace {
 
@@ -119,6 +121,7 @@ void JapaneseDictionary::MakeStartRanges() {
 bool JapaneseDictionary::AddWords(const std::filesystem::path& file) {
     if (!IsOpen()) return false;
     if (added_) return added_->AddWords(file);
+    if (depth_ == std::numeric_limits<std::uint8_t>::max()) return false;
     auto added = std::make_unique<JapaneseDictionary>();
     if (!added->Open(file)) return false;
     // The same reading codes: the same characters, in the same order.
@@ -132,7 +135,8 @@ ReadingCodes JapaneseDictionary::Encode(std::wstring_view reading) const {
     ReadingCodes codes(reading.size(), 0);
     if (!reverse_) return codes;
     for (std::size_t i = 0; i < reading.size(); ++i) {
-        codes[i] = reverse_[static_cast<std::uint16_t>(reading[i])];
+        const auto c = static_cast<std::uint32_t>(reading[i]);
+        codes[i] = c > 0xFFFF ? 0 : reverse_[c];
     }
     return codes;
 }
