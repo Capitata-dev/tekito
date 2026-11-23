@@ -490,6 +490,7 @@ void JapaneseComposer::SetLiveConversion(bool on) {
 
 void JapaneseComposer::Insert(wchar_t key) {
     lastCommit_.reset();
+    markLeft_ = false;
     if (letterDelayMs_ || kanjiDelayMs_) lastKeyAt_ = Now();
     mixKanaShown_ = false;
     if (aiJudge_ && !chunkJudge_ && !Typing()) aiJudge_->Warm();
@@ -4999,6 +5000,7 @@ std::vector<std::wstring> JapaneseComposer::PhraseKeys() const {
 }
 
 std::wstring JapaneseComposer::Commit() {
+    markLeft_ = false;
     if (!chunkJudge_) return CommitChunk();
     // Enter commits what is shown, and converts nothing: Japanese typed
     // without Space stays kana, unless live conversion shows it converted;
@@ -6198,6 +6200,31 @@ std::wstring JapaneseComposer::CommitChunk() {
     ClearChunk();
     keep(text);
     return text;
+}
+
+std::wstring JapaneseComposer::CommitBeforeMark(wchar_t key) {
+    if (!IsConverted()) Convert();
+    std::wstring text = Commit();
+    if (text.empty() || IsComposing()) return text;
+    const wchar_t mark = text.back();
+    if (std::wstring_view(L"\x3001\x3002\xFF0C\xFF0E\xFF01\xFF1F").find(mark) == std::wstring_view::npos) return text;
+    // The mark typed again on its own, converted: it stays when it shows as
+    // it was committed.
+    Insert(key);
+    if (!IsConverted()) Convert();
+    if (!IsConverted() || phrases_.size() != 1 || PhraseText(phrases_.front()) != std::wstring(1, mark)) {
+        ClearChunk();
+        return text;
+    }
+    text.pop_back();
+    markLeft_ = true;
+    return text;
+}
+
+void JapaneseComposer::DropMark() noexcept {
+    if (!MarkLeft()) return;
+    ClearChunk();
+    markLeft_ = false;
 }
 
 bool JapaneseComposer::EndsAtPunctuation() const {

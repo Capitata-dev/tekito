@@ -629,6 +629,82 @@ void TestComposerConversion(const RomajiTable& table, const MiniPack& pack) {
     Require(!composer.IsConverted(), "typing after a conversion starts typing again");
 }
 
+// Commit at punctuation: the text before the mark commits, the mark stays
+// for its other forms, and goes on with the next key.
+void TestMarkLeft(const RomajiTable& table, const MiniPack& pack) {
+    using tekito::japanese::KeyCommand;
+    using tekito::japanese::KeyPress;
+    using Action = KeyCommand::Action;
+    using Key = KeyPress::Key;
+    const tekito::japanese::JapaneseConverter converter(pack.dictionary, pack.matrix);
+    JapaneseComposer composer(&table);
+    composer.SetConverter(&converter);
+    composer.SetCommitAtPunctuation(true);
+    const tekito::japanese::KeyOptions options;
+    const auto press = [](Key key) {
+        KeyPress p;
+        p.key = key;
+        return p;
+    };
+    const auto type = [](wchar_t character) {
+        KeyPress p;
+        p.key = Key::Character;
+        p.character = character;
+        return p;
+    };
+    std::wstring committed;
+    const auto hit = [&](const KeyPress& key) -> std::optional<KeyCommand> {
+        const auto command = tekito::japanese::TranslateKey(composer, key, options);
+        if (!command) return command;
+        const auto outcome = tekito::japanese::ApplyKey(composer, *command);
+        if (outcome.committed) committed += *outcome.committed;
+        return command;
+    };
+    const auto typeAll = [&](std::wstring_view keys) {
+        for (const wchar_t key : keys) hit(type(key));
+    };
+
+    typeAll(L"watashinonamaehanakanodesu.");
+    RequireText(committed, L"私の名前は中野です", "the text before the mark commits");
+    Require(composer.MarkLeftUntouched(), "the mark stays");
+    RequireText(SegmentsText(composer), L"*。", "converted on its own");
+    typeAll(L"a");
+    RequireText(committed, L"私の名前は中野です。", "the next key commits it first");
+    RequireText(composer.Preedit(), L"あ", "and types on");
+    Require(hit(press(Key::Escape)) && !composer.IsComposing(), "Esc drops what was typed");
+
+    committed.clear();
+    typeAll(L"nakano.");
+    const auto enter = hit(press(Key::Enter));
+    Require(enter && enter->action == Action::Commit && enter->letKeyThrough && !composer.IsComposing(),
+            "Enter commits the mark and goes on to the application");
+    Require(committed.size() > 1 && committed.back() == L'\x3002', "with the mark");
+
+    committed.clear();
+    typeAll(L"nakano.");
+    const auto left = hit(press(Key::Left));
+    Require(left && left->letKeyThrough && !composer.IsComposing(), "so do the arrows");
+
+    committed.clear();
+    typeAll(L"nakano.");
+    Require(hit(press(Key::Backspace)) && !composer.IsComposing(), "Backspace drops the mark in one press");
+    Require(!committed.empty() && committed.back() != L'\x3002', "the text before it stays committed");
+
+    committed.clear();
+    typeAll(L"nakano.");
+    hit(press(Key::Space));
+    Require(composer.IsComposing() && !composer.MarkLeftUntouched(), "Space goes into the mark's forms");
+
+    composer.Clear();
+    composer.SetLiveConversion(true);
+    committed.clear();
+    typeAll(L"nakano.");
+    Require(composer.MarkLeftUntouched() && !committed.empty() && committed.back() != L'\x3002',
+            "with live conversion the mark stays too");
+    typeAll(L"a");
+    Require(!committed.empty() && committed.back() == L'\x3002', "and goes before what is typed next");
+}
+
 // The list's pages: the first in one column, numbered; the pages after it
 // in columns, down then across, with the keys going by them.
 void TestListColumns(const RomajiTable& table, const MiniPack& pack) {
@@ -3123,6 +3199,7 @@ int main(int argc, char** argv) {
     TestComposerConversion(*table, *pack);
     TestKeys(*table, *pack);
     TestListColumns(*table, *pack);
+    TestMarkLeft(*table, *pack);
     TestLiveConversion(*table, *pack);
     TestAddresses(*table, *pack);
     TestCapitals(*table, *pack);

@@ -87,6 +87,25 @@ std::optional<KeyCommand> TranslateKey(const JapaneseComposer& composer, const K
             break;
         }
     }
+    // The mark left at punctuation (CommitBeforeMark): Space and Henkan
+    // show its other forms, Backspace drops it, Esc steps back; any other
+    // key commits it and goes on to the application, as it would have
+    // with the mark committed.
+    if (composer.MarkLeftUntouched()) {
+        switch (key.key) {
+        case Key::Character:
+        case Key::Space:
+        case Key::Convert:
+        case Key::Backspace:
+        case Key::Escape:
+            break;
+        default: {
+            auto command = Make(Action::Commit);
+            command.letKeyThrough = true;
+            return command;
+        }
+        }
+    }
     if (composer.IsConverted()) {
         switch (key.key) {
         case Key::Space:
@@ -259,16 +278,24 @@ KeyOutcome ApplyKey(JapaneseComposer& composer, const KeyCommand& command) {
     case Action::Insert:
         // After a conversion, typing on commits it and starts anew (live
         // conversion types on).
-        if (composer.CommitsBeforeTyping()) outcome.committed = composer.Commit();
+        // A mark left at punctuation goes before what is typed next.
+        if (composer.CommitsBeforeTyping() || composer.MarkLeft()) outcome.committed = composer.Commit();
         composer.Insert(command.character);
         // A punctuation mark commits the text up to it, converted as Space
-        // converts it (live conversion and Mix convert on Enter themselves).
+        // converts it (live conversion and Mix convert on Enter themselves);
+        // the mark stays for its other forms.
         if (composer.EndsAtPunctuation()) {
-            if (!composer.IsConverted()) composer.Convert();
-            outcome.committed = outcome.committed.value_or(std::wstring{}) + composer.Commit();
+            const std::wstring before = composer.CommitBeforeMark(command.character);
+            if (!before.empty() || !composer.IsComposing()) {
+                outcome.committed = outcome.committed.value_or(std::wstring{}) + before;
+            }
         }
         break;
     case Action::Backspace:
+        if (composer.MarkLeftUntouched()) {
+            composer.DropMark();
+            break;
+        }
         composer.Backspace();
         break;
     case Action::Cancel:

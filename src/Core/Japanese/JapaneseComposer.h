@@ -283,6 +283,20 @@ public:
     // The mark just typed ends the text there (SetCommitAtPunctuation):
     // not after digits or letters (1.5, v1.0) nor in an address.
     [[nodiscard]] bool EndsAtPunctuation() const;
+    // EndsAtPunctuation: the text before the mark committed, converted as
+    // Space converts it; the mark (typed with `key`) stays, converted on its
+    // own, so Space shows its other forms (．, ., …). What was committed.
+    [[nodiscard]] std::wstring CommitBeforeMark(wchar_t key);
+    // The mark CommitBeforeMark left is all there is; Untouched: as it was
+    // left (its list not opened, nothing else chosen).
+    [[nodiscard]] bool MarkLeft() const noexcept {
+        return markLeft_ && IsConverted() && phrases_.size() == 1;
+    }
+    [[nodiscard]] bool MarkLeftUntouched() const noexcept {
+        return MarkLeft() && !listOpen_ && phrases_.front().selected == 0;
+    }
+    // The mark left, dropped (Backspace takes it in one press).
+    void DropMark() noexcept;
     [[nodiscard]] bool SlipAutoApply() const noexcept { return slipAutoApply_; }
     // The first emoji for a reading shown on the first page of its list
     // (off: with the other symbols, last).
@@ -1200,6 +1214,8 @@ private:
     // with the letter delay).
     [[nodiscard]] std::wstring DisplayTyping() const;
     bool commitAtPunctuation_{false};
+    // CommitBeforeMark left a mark (MarkLeft).
+    bool markLeft_{false};
     // StepBack showed the keys typed: Esc again drops everything.
     bool keysShown_{false};
     // StepBack showed the kana for Mix's live conversion: typing brings the
