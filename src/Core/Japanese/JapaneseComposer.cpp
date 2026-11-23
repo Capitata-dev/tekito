@@ -4343,6 +4343,10 @@ void JapaneseComposer::AddSlipCandidatesFor(PhraseState& phrase) const {
     // A whole-input slip reads better than what is shown: the sentences the
     // check read for the chunk candidates were of the slip.
     bool wholeSlipBetter = false;
+    // So much better that it is likely what was meant (ありがとうございます
+    // for ありがようございます): right after the first choice, the next
+    // Space; not when what was typed reads nearly as well (介護, 会議).
+    bool wholeSlipLikely = false;
     if (phrases_.size() > 1 && allKeys.size() <= kWholeSlipKeys && lettersOnly(allKeys)) {
         const std::wstring typedAll = typedKanaOf(allKeys);
         const std::int64_t typedCost = costOf(converter_->Best(typedAll, 0, userDictionary_));
@@ -4366,9 +4370,16 @@ void JapaneseComposer::AddSlipCandidatesFor(PhraseState& phrase) const {
                 std::vector<std::wstring> sentences{shown};
                 for (const auto& c : wholeInput) sentences.push_back(c.text);
                 const auto scores = reranker_->LogProbabilities(sentences, precedingText_, &rerankerMemory_);
-                for (std::size_t i = 1; i < scores.size(); ++i) wholeSlipBetter = wholeSlipBetter || scores[i] > scores[0];
+                // ln p: ありがとうございます over ありがようございます by 10 and
+                // more; 会議 over 介護 by a few.
+                constexpr double kWholeSlipLikely = 6.0;
+                for (std::size_t i = 1; i < scores.size(); ++i) {
+                    wholeSlipBetter = wholeSlipBetter || scores[i] > scores[0];
+                    if (i == 1) wholeSlipLikely = scores[i] > scores[0] + kWholeSlipLikely;
+                }
             } else {
                 for (const auto& c : wholeInput) wholeSlipBetter = wholeSlipBetter || c.cost + kSlipLikelier < typedCost;
+                wholeSlipLikely = wholeInput.front().cost + 2 * kSlipLikelier < typedCost;
             }
         }
         // The whole input split another way inside its first phrase, when
@@ -4495,7 +4506,10 @@ void JapaneseComposer::AddSlipCandidatesFor(PhraseState& phrase) const {
             if (phrase.selected > k) --phrase.selected;
         }
     }
-    if (likelier) {
+    if (wholeSlipLikely && !wholeInput.empty()) {
+        added.insert(added.begin(), std::make_move_iterator(wholeInput.begin()), std::make_move_iterator(wholeInput.end()));
+        likelier = true;
+    } else if (likelier) {
         added.insert(added.end(), std::make_move_iterator(wholeInput.begin()), std::make_move_iterator(wholeInput.end()));
     } else {
         added.insert(added.begin(), std::make_move_iterator(wholeInput.begin()), std::make_move_iterator(wholeInput.end()));
