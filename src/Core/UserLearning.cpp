@@ -197,8 +197,10 @@ void UserLearningStore::Reset() noexcept {
 }
 
 bool UserLearningStore::Forget(std::wstring_view rawText, std::wstring_view candidate) {
+    const auto raw = LearningKey(rawText);
+    const auto chosen = LearningKey(candidate);
     return std::erase_if(preferences_, [&](const UserLearningPreference& preference) {
-               return preference.rawText == rawText && preference.candidate == candidate;
+               return preference.rawText == raw && preference.candidate == chosen;
            }) > 0;
 }
 

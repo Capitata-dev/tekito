@@ -328,7 +328,14 @@ void Paint(Menu& menu) {
     target->BeginDraw();
     target->Clear(menu.theme.acrylic ? Rgba(0, 0, 0, 0) : menu.theme.background);
     winrt::com_ptr<ID2D1SolidColorBrush> brush;
-    target->CreateSolidColorBrush(menu.theme.text, brush.put());
+    if (FAILED(target->CreateSolidColorBrush(menu.theme.text, brush.put())) || !brush) {
+        // The device was lost (or memory ran out): drawn again on a new
+        // target next time.
+        (void)target->EndDraw();
+        menu.target = nullptr;
+        menu.icons.clear();
+        return;
+    }
     for (std::size_t i = 0; i < menu.items.size(); ++i) {
         const auto& item = menu.items[i];
         const auto& row = menu.rows[i];

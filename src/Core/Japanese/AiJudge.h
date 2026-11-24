@@ -49,6 +49,15 @@ public:
     [[nodiscard]] virtual std::optional<AiConversion> Convert(std::wstring_view reading,
                                                               std::span<const std::wstring> sentences,
                                                               std::wstring_view context, bool write = true) const = 0;
+    // Convert, waiting `most` at the longest (less when the judge itself
+    // waits less): for a key the application waits on, as Enter in Mix.
+    [[nodiscard]] virtual std::optional<AiConversion> ConvertWithin(std::wstring_view reading,
+                                                                    std::span<const std::wstring> sentences,
+                                                                    std::wstring_view context, bool write,
+                                                                    std::chrono::milliseconds most) const {
+        (void)most;
+        return Convert(reading, sentences, context, write);
+    }
     // Convert without waiting: the answer when this same question was the
     // last answered, else nothing, and it is asked in the background (a
     // newer question replaces one still waiting to be sent).
@@ -102,6 +111,10 @@ public:
     [[nodiscard]] bool Writes() const noexcept override { return kind_.writes; }
     [[nodiscard]] std::optional<AiConversion> Convert(std::wstring_view reading, std::span<const std::wstring> sentences,
                                                       std::wstring_view context, bool write = true) const override;
+    [[nodiscard]] std::optional<AiConversion> ConvertWithin(std::wstring_view reading,
+                                                            std::span<const std::wstring> sentences,
+                                                            std::wstring_view context, bool write,
+                                                            std::chrono::milliseconds most) const override;
     [[nodiscard]] std::optional<AiConversion> Ask(std::wstring_view reading, std::span<const std::wstring> sentences,
                                                   std::wstring_view context, bool write = true) const override;
     [[nodiscard]] bool Asking() const override;

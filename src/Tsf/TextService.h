@@ -30,6 +30,14 @@ enum class MeaningLanguage;
 
 namespace tekito::tsf {
 
+// TEKITO's text input processor. Its code is split by area:
+//   TextService.cpp             COM, activation, settings, modes, sinks
+//   TextServiceKeys.cpp         which keys it takes, the key edit session
+//   TextServiceEnglish.cpp      English input and words looked at again
+//   TextServiceJapanese.cpp     Japanese and Mix input
+//   TextServiceComposition.cpp  the composition in the document
+//   TextServiceCandidates.cpp   the candidate list and the mode badge
+//   TextServiceShared.h         helpers those files share
 class TextService final : public ITfTextInputProcessorEx,
                           public ITfKeyEventSink,
                           public ITfCompositionSink,
@@ -135,6 +143,8 @@ private:
     HRESULT ApplyDisplayAttribute(ITfContext* context, TfEditCookie editCookie, ITfRange* range,
                                   REFGUID attribute = GUID_TekitoDisplayAttribute);
     HRESULT EndComposition(TfEditCookie editCookie);
+    // Takes the display attribute off the composition's text.
+    void ClearCompositionUnderline(TfEditCookie editCookie);
     HRESULT InsertAtSelection(ITfContext* context, TfEditCookie editCookie,
                               const std::wstring& text);
     void RefreshCandidates(ITfContext* context, TfEditCookie editCookie);
@@ -226,6 +236,7 @@ private:
     // as Enter would convert it.
     // Shows the text again when it changes by itself (display delays).
     void ScheduleJapaneseRedisplay();
+    void StopJapaneseRedisplay();
     static void CALLBACK OnJapaneseRedisplayTimer(HWND, UINT, UINT_PTR id, DWORD);
     UINT_PTR redisplayTimer_{0};
     void ScheduleJapaneseRefine();
@@ -397,7 +408,7 @@ private:
     // user's words).
     std::shared_ptr<const japanese::PostalCodes> postalCodes_;
     // Candidates per page of the Japanese list (UserSettings::candidateRows).
-    std::size_t japanesePage_{9};
+    std::size_t japanesePage_{12};
     RECT candidateAnchor_{};
     CandidateWindow candidateWindow_;
     CatSounds catSounds_;

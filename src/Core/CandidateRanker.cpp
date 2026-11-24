@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace tekito {
 
@@ -37,39 +38,29 @@ double CombinedScore(const CorrectionCandidate& candidate) {
 
 void CandidateRanker::RankCorrections(std::vector<CorrectionCandidate>& candidates,
                                       std::size_t inputSize) const {
-    std::stable_sort(candidates.begin(), candidates.end(), [inputSize](const auto& left, const auto& right) {
-        if (left.weakExactRecovery != right.weakExactRecovery) {
-            return left.weakExactRecovery;
-        }
-        if (left.weakExactRecovery || right.weakExactRecovery) {
-            if (left.signals.frequency != right.signals.frequency) {
-                return left.signals.frequency > right.signals.frequency;
-            }
-        }
-        if (left.validWordConflict && right.validWordConflict) {
-            if (left.signals.contextConfidence != right.signals.contextConfidence) {
-                return left.signals.contextConfidence > right.signals.contextConfidence;
-            }
-            if (left.signals.frequency != right.signals.frequency) {
-                return left.signals.frequency > right.signals.frequency;
-            }
-        }
-        const auto learningDelta = left.signals.userLearning - right.signals.userLearning;
-        constexpr double kLearnedPreferenceThreshold = 0.20;
-        constexpr double kLearnedPreferenceMargin = 0.10;
-        if (std::abs(learningDelta) >= kLearnedPreferenceMargin &&
-            std::max(std::abs(left.signals.userLearning),
-                     std::abs(right.signals.userLearning)) >= kLearnedPreferenceThreshold) {
-            return learningDelta > 0.0;
-        }
-        const auto leftScore = CombinedScore(left);
-        const auto rightScore = CombinedScore(right);
-        if (leftScore != rightScore) return leftScore > rightScore;
-
-        // Exact score ties (e.g. no frequency/context data at all for either
-        // side): fall back to the same structural tie-break used before, so
-        // behavior stays deterministic rather than depending on discovery
-        // order.
+    // The order is built from values each candidate has on its own, so it
+    // is a true order: comparing pairs by rules that apply to some pairs
+    // only (learning past a threshold, both being valid words) could go
+    // round in a circle (A before B before C before A), which sorting
+    // cannot follow.
+    //
+    // 1. A weak exact match goes first, the more frequent first.
+    // 2. Learning: a clear preference (at least kLearnedPreferenceThreshold
+    //    either way) puts a candidate up or down in steps of
+    //    kLearnedPreferenceMargin.
+    // 3. Within the same step, candidates that are valid words in conflict
+    //    keep their order by context and frequency, and the others by the
+    //    combined score; the two runs are merged by the combined score.
+    constexpr double kLearnedPreferenceThreshold = 0.20;
+    constexpr double kLearnedPreferenceMargin = 0.10;
+    const auto learnedStep = [](const CorrectionCandidate& candidate) {
+        const double learning = candidate.signals.userLearning;
+        if (std::abs(learning) < kLearnedPreferenceThreshold) return 0LL;
+        return static_cast<long long>(std::floor(learning / kLearnedPreferenceMargin));
+    };
+    // Exact ties (no frequency or context data for either): the shape of
+    // the slip, so the order never depends on the order found.
+    const auto shapeFirst = [inputSize](const CorrectionCandidate& left, const CorrectionCandidate& right) {
         if (left.distance != right.distance) return left.distance < right.distance;
         if (left.repeatedKey != right.repeatedKey) return left.repeatedKey;
         if (left.transposition != right.transposition) return left.transposition;
@@ -77,14 +68,49 @@ void CandidateRanker::RankCorrections(std::vector<CorrectionCandidate>& candidat
         if (left.extraCharacter != right.extraCharacter) return left.extraCharacter;
         const auto leftSize = RawSize(left);
         const auto rightSize = RawSize(right);
-        const auto leftDelta = leftSize > inputSize ? leftSize - inputSize
-                                                    : inputSize - leftSize;
-        const auto rightDelta = rightSize > inputSize ? rightSize - inputSize
-                                                      : inputSize - rightSize;
+        const auto leftDelta = leftSize > inputSize ? leftSize - inputSize : inputSize - leftSize;
+        const auto rightDelta = rightSize > inputSize ? rightSize - inputSize : inputSize - rightSize;
         if (leftDelta != rightDelta) return leftDelta < rightDelta;
-        if (leftSize != rightSize) return leftSize < rightSize;
-        return false;
-    });
+        return leftSize < rightSize;
+    };
+    const auto byScore = [&](const CorrectionCandidate& left, const CorrectionCandidate& right) {
+        const auto leftScore = CombinedScore(left);
+        const auto rightScore = CombinedScore(right);
+        if (leftScore != rightScore) return leftScore > rightScore;
+        return shapeFirst(left, right);
+    };
+    const auto byConflict = [&](const CorrectionCandidate& left, const CorrectionCandidate& right) {
+        if (left.signals.contextConfidence != right.signals.contextConfidence) {
+            return left.signals.contextConfidence > right.signals.contextConfidence;
+        }
+        if (left.signals.frequency != right.signals.frequency) return left.signals.frequency > right.signals.frequency;
+        return byScore(left, right);
+    };
+    const auto group = [&](const CorrectionCandidate& left, const CorrectionCandidate& right) {
+        if (left.weakExactRecovery != right.weakExactRecovery) return left.weakExactRecovery;
+        if (left.weakExactRecovery && left.signals.frequency != right.signals.frequency) {
+            return left.signals.frequency > right.signals.frequency;
+        }
+        return learnedStep(left) > learnedStep(right);
+    };
+    std::stable_sort(candidates.begin(), candidates.end(), group);
+    for (auto first = candidates.begin(); first != candidates.end();) {
+        const auto last = std::find_if(first, candidates.end(), [&](const CorrectionCandidate& c) {
+            return group(*first, c);
+        });
+        std::vector<CorrectionCandidate> conflicts;
+        std::vector<CorrectionCandidate> others;
+        for (auto it = first; it != last; ++it) (it->validWordConflict ? conflicts : others).push_back(std::move(*it));
+        std::stable_sort(conflicts.begin(), conflicts.end(), byConflict);
+        std::stable_sort(others.begin(), others.end(), byScore);
+        auto out = first;
+        auto a = conflicts.begin();
+        auto b = others.begin();
+        while (a != conflicts.end() || b != others.end()) {
+            const bool takeConflict = b == others.end() || (a != conflicts.end() && !byScore(*b, *a));
+            *out++ = std::move(takeConflict ? *a++ : *b++);
+        }
+        first = last;
+    }
 }
-
 }  // namespace tekito

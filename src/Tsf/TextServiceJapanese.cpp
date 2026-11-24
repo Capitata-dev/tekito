@@ -2,6 +2,7 @@
 // typing Japanese. The English typing path is in TextService.cpp.
 
 #include "Tsf/TextService.h"
+#include "Tsf/TextServiceShared.h"
 
 #include "Core/Japanese/JapaneseData.h"
 #include "Core/Japanese/JapaneseUserDictionary.h"
@@ -73,32 +74,12 @@ InputMode TextService::SharedMode() const noexcept {
 }
 
 InputMode TextService::AvailableMode(InputMode mode) const noexcept {
-    if (mode == InputMode::Japanese && !JapaneseModeAvailable()) {
-        return MixedModeAvailable() ? InputMode::Mixed : InputMode::Convert;
-    }
-    if (mode == InputMode::Mixed && !MixedModeAvailable()) {
-        return JapaneseModeAvailable() ? InputMode::Japanese : InputMode::Convert;
-    }
-    return mode;
+    return userdata::AvailableMode(userSettings_, japaneseProfile_, mode);
 }
 
 InputMode TextService::ToggledMode() const noexcept {
-    if (!JapaneseTypingAvailable()) {
-        return mode_ == InputMode::Convert ? InputMode::Direct : InputMode::Convert;
-    }
-    // The modes chosen to go round (UserSettings::switchModes) that are on,
-    // in the order chosen (UserSettings::switchOrder).
-    std::vector<InputMode> round;
-    for (const auto& [mode, bit] : userdata::SwitchOrderModes(userSettings_.switchOrder)) {
-        if ((userSettings_.switchModes & bit) != 0 && AvailableMode(mode) == mode) round.push_back(mode);
-    }
-    // Fewer than two: a typing mode and Auto.
-    if (round.size() < 2) {
-        const auto typing = AvailableMode(InputMode::Japanese);
-        return mode_ == typing ? InputMode::Convert : typing;
-    }
-    const auto at = std::find(round.begin(), round.end(), mode_);
-    return at == round.end() || at + 1 == round.end() ? round.front() : *(at + 1);
+    // As the desktop companion switches too (userdata::NextSwitchMode).
+    return userdata::NextSwitchMode(userSettings_, japaneseProfile_, mode_);
 }
 
 void TextService::UpdateActiveProfile() {
@@ -427,7 +408,7 @@ wchar_t TypedCharacter(WPARAM wParam) {
     wchar_t buffer[8]{};
     const UINT scanCode = MapVirtualKeyW(static_cast<UINT>(wParam), MAPVK_VK_TO_VSC);
     const int count = ToUnicodeEx(static_cast<UINT>(wParam), scanCode, keyboardState, buffer,
-                                  static_cast<int>(std::size(buffer)), 0, GetKeyboardLayout(0));
+                                  static_cast<int>(std::size(buffer)), 4, GetKeyboardLayout(0));
     return count == 1 ? buffer[0] : 0;
 }
 
@@ -624,12 +605,19 @@ thread_local TextService* redisplayOwner = nullptr;
 void TextService::ScheduleJapaneseRedisplay() {
     const auto next = japanese_.IsComposing() ? japanese_.NextDisplayChange() : std::nullopt;
     if (!next) {
-        if (redisplayTimer_) KillTimer(nullptr, redisplayTimer_);
-        redisplayTimer_ = 0;
+        StopJapaneseRedisplay();
         return;
     }
     redisplayOwner = this;
     redisplayTimer_ = SetTimer(nullptr, redisplayTimer_, std::max<UINT>(*next, USER_TIMER_MINIMUM), &TextService::OnJapaneseRedisplayTimer);
+}
+
+// The timer stops with the text service: a thread timer outlives it, and its
+// callback would reach a text service that is gone.
+void TextService::StopJapaneseRedisplay() {
+    if (redisplayTimer_) KillTimer(nullptr, redisplayTimer_);
+    redisplayTimer_ = 0;
+    if (redisplayOwner == this) redisplayOwner = nullptr;
 }
 
 void CALLBACK TextService::OnJapaneseRedisplayTimer(HWND, UINT, UINT_PTR id, DWORD) {
@@ -719,6 +707,9 @@ HRESULT TextService::ShowJapanesePreedit(ITfContext* context, TfEditCookie editC
     if (!japanese_.IsComposing()) {
         candidateWindow_.Hide();
         if (composition_) {
+            // The underline off while it still has text to come off: once
+            // the text is gone, some browsers keep drawing it.
+            ClearCompositionUnderline(editCookie);
             const HRESULT hr = ReplaceComposition(context, editCookie, std::wstring{});
             if (FAILED(hr)) return hr;
         }
@@ -920,7 +911,23 @@ void TextService::ShowJapaneseCandidates(ITfContext* context, TfEditCookie editC
         Candidate row;
         row.text = list.rows[i].text;
         row.id = list.rows[i].number;
-        if (list.rows[i].suggestion) row.label = SemanticLabel::Suggestion;
+        // One tag a row: a "maybe", what was typed, then its width.
+        using Width = japanese::CandidateList::Row::Width;
+        if (list.rows[i].repeat) {
+            row.sourceFlags |= CandidateSourceDoubledWord;
+        } else if (list.rows[i].suggestion) {
+            row.label = SemanticLabel::Suggestion;
+        } else if (list.rows[i].asTyped) {
+            row.isOriginal = true;
+        } else if (list.rows[i].slang) {
+            row.label = SemanticLabel::Slang;
+        } else if (list.rows[i].oldForm) {
+            row.label = SemanticLabel::OldForm;
+        } else if (list.rows[i].variantForm) {
+            row.label = SemanticLabel::VariantForm;
+        } else if (list.rows[i].width != Width::None) {
+            row.label = list.rows[i].width == Width::Full ? SemanticLabel::FullWidth : SemanticLabel::HalfWidth;
+        }
         row.groupStart = list.rows[i].groupStart;
         // Only the rows on the page shown are looked up.
         row.hasMeaning = userSettings_.meaningsEnabled && i >= list.pageStart && i < list.pageStart + list.count &&
@@ -942,7 +949,7 @@ void TextService::ShowJapaneseCandidates(ITfContext* context, TfEditCookie editC
     candidateWindow_.SetRainbow(userSettings_.rainbowAccent);
     candidateWindow_.SetJapanese(userdata::UseJapaneseUi(userSettings_.uiLanguage));
     candidateWindow_.Show(anchor, rows, selected ? *selected : CandidateWindow::kNoSelection, list.pageStart,
-                          list.count, detail, caption);
+                          list.count, detail, caption, list.columnRows, list.page, list.pages);
 }
 
 HRESULT TextService::CommitJapanese(ITfContext* context, TfEditCookie editCookie) {
@@ -971,6 +978,70 @@ HRESULT TextService::WriteJapaneseCommit(ITfContext* context, TfEditCookie editC
     const HRESULT hr = ReplaceComposition(context, editCookie, text);
     if (FAILED(hr)) return hr;
     return EndComposition(editCookie);
+}
+
+
+void TextService::CheckJapaneseContext(ITfContext* context, TfEditCookie editCookie) {
+    const std::wstring before = ReadSelectionContext(context, editCookie);
+    // Mix: English there starts with a capital when a sentence starts.
+    japanese_.SetSentenceStart(japanese::JapaneseComposer::EndsSentence(before));
+    if (lastJapaneseCommit_.empty() || !before.ends_with(lastJapaneseCommit_)) {
+        japanese_.ForgetContext();
+    }
+    // The text before the caret, for conversion and the sentence check to
+    // read on from; kept in memory only, and not read in a private field.
+    if (!privateField_) japanese_.SetPrecedingText(before);
+}
+
+HRESULT TextService::ReconvertJapanese(ITfContext* context, TfEditCookie editCookie) {
+    TF_SELECTION selection{};
+    ULONG fetched = 0;
+    if (FAILED(context->GetSelection(editCookie, TF_DEFAULT_SELECTION, 1, &selection, &fetched)) || fetched != 1 ||
+        !selection.range) {
+        return S_OK;
+    }
+    ComPtr<ITfRange> range;
+    range.Attach(selection.range);
+    std::wstring text = ReadRangeText(range.Get(), editCookie);
+    // Nothing selected: the text just committed, while the caret is after it.
+    const bool committed = text.empty();
+    if (committed) {
+        if (lastJapaneseCommit_.empty() || !ReadSelectionContext(context, editCookie).ends_with(lastJapaneseCommit_)) {
+            return S_OK;
+        }
+        text = lastJapaneseCommit_;
+    }
+    // A short piece of one line only (a longer selection may not be read whole).
+    constexpr std::size_t kLongest = 64;
+    // An embedded object (a picture in Word) shows as U+FFFC: never replaced.
+    if (text.size() > kLongest || text.find_first_of(L"\r\n\t\xFFFC") != std::wstring::npos) return S_OK;
+    if (!japanese_.Reconvert(text)) return S_OK;
+    japanese_.ForgetCommit();
+    lastJapaneseCommit_.clear();
+    const HRESULT hr = committed ? StartCompositionBefore(context, editCookie, text.size())
+                                 : EnsureComposition(context, editCookie);
+    if (FAILED(hr)) {
+        japanese_.Clear();
+        return hr;
+    }
+    return ShowJapanesePreedit(context, editCookie);
+}
+
+HRESULT TextService::UndoJapaneseCommit(ITfContext* context, TfEditCookie editCookie) {
+    // Only while the caret is still right after the text.
+    const auto* last = japanese_.LastCommit();
+    if (!last || !ReadSelectionContext(context, editCookie).ends_with(*last)) {
+        japanese_.ForgetCommit();
+        return S_OK;
+    }
+    const std::wstring text = *last;
+    HRESULT hr = ReplaceTrailingWhitespaceAtSelection(context, editCookie, text.size(), std::wstring{});
+    if (FAILED(hr)) return hr;
+    japanese_.UndoCommit();
+    lastJapaneseCommit_.clear();
+    hr = EnsureComposition(context, editCookie);
+    if (FAILED(hr)) return hr;
+    return ShowJapanesePreedit(context, editCookie);
 }
 
 }  // namespace tekito::tsf

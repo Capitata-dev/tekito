@@ -173,11 +173,15 @@ std::optional<DictionaryEntry> ExternalDictionaryProvider::Find(
         input.seekg(static_cast<std::streamoff>(start->offset));
         std::string line;
         while (std::getline(input, line)) {
-            DictionaryEntry entry;
-            std::string rowKey;
-            if (!Parse(line, entry, rowKey)) continue;
-            if (rowKey == key) return entry;
+            // The key alone first: only the row asked for is parsed whole.
+            if (line.empty() || line.front() == '#') continue;
+            const std::string_view rowKey = Trim(std::string_view(line).substr(0, line.find('\t')));
+            if (rowKey.empty()) continue;
             if (rowKey > key) break;
+            if (rowKey != key) continue;
+            DictionaryEntry entry;
+            std::string parsedKey;
+            if (Parse(line, entry, parsedKey)) return entry;
         }
     } catch (...) {
     }

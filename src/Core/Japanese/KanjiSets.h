@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -40,6 +42,21 @@ public:
     bool LoadVariants(const std::filesystem::path& file);
     void AddVariants(char32_t kanji, std::u32string variants) { variants_[kanji] = std::move(variants); }
     [[nodiscard]] bool HasVariants() const noexcept { return !variants_.empty(); }
+    // Each kanji's old forms, 旧字体 (old-forms.tsv, "国<TAB>國"), from
+    // the same pack.
+    bool LoadOldForms(const std::filesystem::path& file);
+    void AddOldForms(char32_t kanji, std::u32string oldForms);
+    // `text` as written today: each old form (旧字体: 國) as its new form
+    // (国), each other variant that is not 常用 (異体字: 髙, 﨑, 邉) as the
+    // first 常用 kanji it is a variant of. Old when every kanji changed was
+    // an old form, Other when one was another variant; none when no kanji
+    // changed.
+    enum class VariantKind : std::uint8_t { Old, Other };
+    struct StandardText {
+        std::wstring text;
+        VariantKind kind{VariantKind::Old};
+    };
+    [[nodiscard]] std::optional<StandardText> StandardForm(std::wstring_view text) const;
     // `text` with one of its kanji written another way (高橋: 髙橋, 崎: 﨑),
     // kanji by kanji and each kanji's variants in order, at most `most`.
     [[nodiscard]] std::vector<std::wstring> VariantForms(std::wstring_view text, std::size_t most) const;
@@ -47,6 +64,8 @@ public:
 private:
     std::unordered_map<char32_t, int> levels_;
     std::unordered_map<char32_t, std::u32string> variants_;
+    // Each old form's new form (國: 国).
+    std::unordered_map<char32_t, char32_t> newForms_;
 };
 
 }  // namespace tekito::japanese

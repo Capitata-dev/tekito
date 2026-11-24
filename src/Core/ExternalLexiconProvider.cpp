@@ -181,35 +181,10 @@ bool StartsWith(std::string_view value, std::string_view prefix) {
     return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
 }
 
+// The same distance as the SymSpell index's, so a word is near the same way
+// whichever finds it.
 bool Near(std::string_view left, std::string_view right, std::size_t limit) {
-    if (left.size() > right.size() + limit || right.size() > left.size() + limit) return false;
-    constexpr std::size_t kStackColumns = 128;
-    std::array<std::size_t, kStackColumns> stackPrevious{};
-    std::array<std::size_t, kStackColumns> stackCurrent{};
-    std::vector<std::size_t> heapPrevious;
-    std::vector<std::size_t> heapCurrent;
-    auto* previous = stackPrevious.data();
-    auto* current = stackCurrent.data();
-    if (right.size() + 1 > kStackColumns) {
-        heapPrevious.resize(right.size() + 1);
-        heapCurrent.resize(right.size() + 1);
-        previous = heapPrevious.data();
-        current = heapCurrent.data();
-    }
-    for (std::size_t column = 0; column <= right.size(); ++column) previous[column] = column;
-    for (std::size_t row = 1; row <= left.size(); ++row) {
-        current[0] = row;
-        std::size_t best = current[0];
-        for (std::size_t column = 1; column <= right.size(); ++column) {
-            current[column] = std::min({current[column - 1] + 1, previous[column] + 1,
-                                        previous[column - 1] +
-                                            (left[row - 1] == right[column - 1] ? 0 : 1)});
-            best = std::min(best, current[column]);
-        }
-        if (best > limit) return false;
-        std::swap(previous, current);
-    }
-    return previous[right.size()] <= limit;
+    return BoundedEditDistance(left, right, limit) <= limit;
 }
 
 }  // namespace
@@ -376,11 +351,12 @@ void ExternalLexiconProvider::Find(const LexiconQuery& query, const Visitor& vis
     // Below 3 characters, a 2-delete SymSpell query collides with a very large
     // share of the dictionary (most words reduce to some 0-1 character string
     // within 2 deletions), so the candidate pool it has to verify balloons and
-    // latency with it. The disk-streaming scan below is bounded by same-first-
-    // character prefix instead, which stays cheap at this length, so short
-    // queries keep using it.
-    if (query.kind == LexiconQuery::Kind::Candidate && symSpellIndex_.IsBuilt() && key.size() > 2) {
-        auto matches = symSpellIndex_.Lookup(key, 2);
+    // latency with it; at one edit it stays small. A 2-edit query that short
+    // keeps the disk-streaming scan below, bounded by the first character.
+    if (query.nearSlip && symSpellIndex_.IsBuilt()) return;
+    if (query.kind == LexiconQuery::Kind::Candidate && symSpellIndex_.IsBuilt() &&
+        (key.size() > 2 || query.maxDistance < 2)) {
+        auto matches = symSpellIndex_.Lookup(key, query.maxDistance);
         std::size_t resultCount = 0;
         for (const auto& word : matches) {
             const auto ownedWord = LowerAscii(word);
@@ -416,7 +392,7 @@ void ExternalLexiconProvider::Find(const LexiconQuery& query, const Visitor& vis
             const bool match = query.kind == LexiconQuery::Kind::Exact
                                    ? word == key
                                    : query.kind == LexiconQuery::Kind::Candidate
-                                         ? (!key.empty() && word.front() == key.front() && Near(word, key, 2))
+                                         ? (!key.empty() && word.front() == key.front() && Near(word, key, query.maxDistance))
                                          : StartsWith(word, key);
             if (match) {
                 const auto ownedWord = LowerAscii(token);

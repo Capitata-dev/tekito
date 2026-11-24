@@ -80,6 +80,26 @@ bool EdgeScorer::Open(const std::filesystem::path& dir) {
     longest_ = header[6];
     parts_ = header[7];
     part_ = header[8];
+    // Sizes a model of this kind has, and as many weights as the file
+    // holds: a damaged or made-up header is turned away before anything is
+    // allocated from it (heads 0 would divide by zero, parts 0 read before
+    // the start).
+    constexpr std::size_t kMost = 1 << 16;
+    if (vocab_ == 0 || vocab_ > kMost || dim == 0 || dim > 1024 || layers == 0 || layers > 12 || heads_ == 0 ||
+        dim % heads_ != 0 || ff_ == 0 || ff_ > 8192 || longest_ == 0 || longest_ > 1024 || parts_ == 0 ||
+        parts_ > kMost || part_ == 0 || part_ > 256) {
+        return false;
+    }
+    {
+        const std::size_t perLayer = 4 * dim + (dim * 3 * dim + 3 * dim) + (dim * dim + dim) + (dim * ff_ + ff_) +
+                                     (ff_ * dim + dim);
+        const std::size_t floats = vocab_ * dim + longest_ * dim + layers * perLayer + 2 * dim +
+                                   (2 * dim * dim + dim) + (dim * dim + dim) + 2 * parts_ * part_ +
+                                   ((dim + 2 * part_ + 2) * dim + dim) + (dim * dim + dim) + 1;
+        std::error_code error;
+        const auto size = std::filesystem::file_size(dir / "edges.bin", error);
+        if (error || size != 4 + sizeof header + floats * 4) return false;
+    }
     bool good = true;
     const auto read = [&](std::vector<float>& to, std::size_t count) {
         to.resize(count);
@@ -115,14 +135,21 @@ bool EdgeScorer::Open(const std::filesystem::path& dir) {
     linear(word2_, dim, dim);
     std::vector<float> scale;
     read(scale, 1);
-    if (!good) return false;
+    if (!good || !std::isfinite(scale[0])) return false;
     costScale_ = std::exp(scale[0]);
+    if (!std::isfinite(costScale_) || costScale_ <= 0.0f) return false;
     tokens_.clear();
     std::ifstream chars(dir / "chars.txt");
     std::string line;
-    for (int index = 0; std::getline(chars, line); ++index) {
+    int index = 0;
+    for (; std::getline(chars, line); ++index) {
         const auto code = std::strtoul(line.c_str(), nullptr, 16);
         if (code != 0) tokens_.emplace(static_cast<wchar_t>(code), index);
+    }
+    // One line per character the model knows.
+    if (static_cast<std::size_t>(index) != vocab_) {
+        tokens_.clear();
+        return false;
     }
     dim_ = dim;
     return true;

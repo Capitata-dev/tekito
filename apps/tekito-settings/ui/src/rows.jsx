@@ -162,7 +162,7 @@ export const switchKeyCaps = (toggleKey, japaneseKeyboard, t) =>
   : toggleKey === 3 ? ["Ctrl", "Shift", "Space"]
   : null;
 
-// The keys, by mode: [id, name, keycaps]. The ids are what AI answers name.
+// The keys, by mode: [id, name, keycaps].
 export function keyGroups(t, { japaneseKeyboard, settings, japanese }) {
   const general = [];
   const switchKey = switchKeyCaps(settings.toggleKey, japaneseKeyboard, t);
@@ -430,17 +430,26 @@ export function AiModelRow({ settings, setSetting, runAction, setConfirm, aiMode
       action: () => runAction("aiModel.download", { model: value }),
     });
   };
+  // A newer version than the one there: offered to replace it.
+  const update = current > 0 && aiModels[keys[current]]?.update;
+  const confirmUpdate = () => setConfirm({
+    title: a.updateTitle,
+    message: a.updateBody(downloadSize(aiModels[keys[current]]?.updateBytes || 0)),
+    confirmLabel: a.update,
+    action: () => runAction("aiModel.download", { model: current }),
+  });
   return (
     <>
     <Row icon="wand_stars" title={<>{a.title}{badges}</>}
       description={(
         <>
-          {downloading ? "" : aiModels.error || a.description}
+          {downloading ? "" : aiModels.error || (update ? a.updateAvailable : a.description)}
           {downloading > 0 && <span className="row-status"><Busy />{a.downloading}</span>}
         </>
       )}
       sub={current > 0 && !downloading && (
         <div className="row-sub-action">
+          {update && <Button variant="quiet" onClick={confirmUpdate}>{a.update}</Button>}
           <Button variant="quiet" onClick={() => runAction("aiModel.remove", { model: current }, a.removed)}>{a.remove}</Button>
         </div>
       )}>

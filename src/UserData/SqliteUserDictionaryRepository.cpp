@@ -145,6 +145,15 @@ bool BindText16(sqlite3_stmt* statement, int index, const std::wstring& value) n
                                SQLITE_TRANSIENT) == SQLITE_OK;
 }
 
+// Ends the transaction BEGIN IMMEDIATE started: committed when `success`,
+// else rolled back. A COMMIT that fails (busy, disk full) is rolled back
+// too, so the next save can begin; never left open.
+bool EndTransaction(sqlite3* database, bool success) noexcept {
+    if (success && sqlite3_exec(database, "COMMIT;", nullptr, nullptr, nullptr) == SQLITE_OK) return true;
+    if (!sqlite3_get_autocommit(database)) (void)sqlite3_exec(database, "ROLLBACK;", nullptr, nullptr, nullptr);
+    return false;
+}
+
 }  // namespace
 
 SqliteUserDictionaryRepository::SqliteUserDictionaryRepository(
@@ -169,23 +178,28 @@ bool SqliteUserDictionaryRepository::Open() noexcept {
     // Encrypted or plain as the user asked, when no other process has it
     // open; then opened with its key when it is encrypted (or new and to be).
     SettleEncryption(databasePath_);
-    std::error_code error;
-    const bool fresh = !std::filesystem::is_regular_file(databasePath_, error) ||
-                       std::filesystem::file_size(databasePath_, error) == 0;
-    const bool locked = fresh ? EncryptionWanted(databasePath_) : DatabaseEncrypted(databasePath_);
-    sqlite3* database = nullptr;
-    if (sqlite3_open16(databasePath_.c_str(), &database) != SQLITE_OK ||
-        (locked && !UnlockDatabase(database, databasePath_))) {
-        if (database) sqlite3_close(database);
-        return false;
+    {
+        // Opened (the file held, by the first statement) while no change of
+        // its encryption can begin in another process.
+        const DatabaseOpening opening;
+        std::error_code error;
+        const bool fresh = !std::filesystem::is_regular_file(databasePath_, error) ||
+                           std::filesystem::file_size(databasePath_, error) == 0;
+        const bool locked = fresh ? EncryptionWanted(databasePath_) : DatabaseEncrypted(databasePath_);
+        sqlite3* database = nullptr;
+        if (sqlite3_open16(databasePath_.c_str(), &database) != SQLITE_OK ||
+            (locked && !UnlockDatabase(database, databasePath_))) {
+            if (database) sqlite3_close(database);
+            return false;
+        }
+        database_ = database;
+        // Every application with TEKITO open shares this file; when two save at
+        // once, the second waits briefly instead of losing what it had to save.
+        sqlite3_busy_timeout(database_, kBusyTimeoutMs);
+        // Write-ahead logging: reading never waits for a save, and saves wait
+        // only for each other (the mode stays with the file).
+        sqlite3_exec(database_, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;", nullptr, nullptr, nullptr);
     }
-    database_ = database;
-    // Every application with TEKITO open shares this file; when two save at
-    // once, the second waits briefly instead of losing what it had to save.
-    sqlite3_busy_timeout(database_, kBusyTimeoutMs);
-    // Write-ahead logging: reading never waits for a save, and saves wait
-    // only for each other (the mode stays with the file).
-    sqlite3_exec(database_, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;", nullptr, nullptr, nullptr);
     if (!EnsureSchema()) {
         Close();
         return false;
@@ -206,6 +220,16 @@ std::int64_t SqliteUserDictionaryRepository::EraseMark() const noexcept {
 
 bool SqliteUserDictionaryRepository::ErasedSince() const noexcept { return EraseMark() != eraseMark_; }
 
+bool SqliteUserDictionaryRepository::BeginWrite() noexcept {
+    // The erase mark is read inside the transaction: another process
+    // erasing everything between the check and the write cannot have this
+    // one write back what it held.
+    if (sqlite3_exec(database_, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK) return false;
+    if (!ErasedSince()) return true;
+    (void)sqlite3_exec(database_, "ROLLBACK;", nullptr, nullptr, nullptr);
+    return false;
+}
+
 void SqliteUserDictionaryRepository::Close() noexcept {
     if (!database_) return;
     sqlite3_close(database_);
@@ -213,6 +237,7 @@ void SqliteUserDictionaryRepository::Close() noexcept {
 }
 
 bool SqliteUserDictionaryRepository::Load(UserDictionary& dictionary) const noexcept {
+    try {
     if (!database_) return false;
 
     sqlite3_stmt* statement = nullptr;
@@ -250,16 +275,18 @@ bool SqliteUserDictionaryRepository::Load(UserDictionary& dictionary) const noex
     sqlite3_finalize(statement);
     if (success) dictionary = std::move(loaded);
     return success;
+    } catch (...) {
+        // Out of memory while loading: nothing loaded, rather than the
+        // process ended (the function is noexcept).
+        return false;
+    }
 }
 
 bool SqliteUserDictionaryRepository::Save(const UserDictionary& dictionary) noexcept {
     if (!database_) return false;
     // Erased (uninstalled) since this was opened: what this process still
     // holds is not written back.
-    if (ErasedSince()) return false;
-    if (sqlite3_exec(database_, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK) {
-        return false;
-    }
+    if (!BeginWrite()) return false;
 
     bool success = sqlite3_exec(database_, "DELETE FROM user_dictionary;", nullptr, nullptr,
                                 nullptr) == SQLITE_OK;
@@ -288,14 +315,12 @@ bool SqliteUserDictionaryRepository::Save(const UserDictionary& dictionary) noex
     }
     if (statement) sqlite3_finalize(statement);
 
-    const char* transaction = success ? "COMMIT;" : "ROLLBACK;";
-    if (sqlite3_exec(database_, transaction, nullptr, nullptr, nullptr) != SQLITE_OK) {
-        success = false;
-    }
+    success = EndTransaction(database_, success);
     return success;
 }
 
 bool SqliteUserDictionaryRepository::LoadSettings(UserSettings& settings) const noexcept {
+    try {
     // switch_modes, once saved, wins over the older japanese_switch_order;
     // start_mode over restore_last_input_mode.
     bool switchModesSaved = false;
@@ -420,8 +445,6 @@ bool SqliteUserDictionaryRepository::LoadSettings(UserSettings& settings) const 
             loaded.mixFirstPageSymbol = value != 0;
         } else if (std::strcmp(key, "candidate_rows") == 0) {
             loaded.candidateRows = UserSettings::ValidCandidateRows(value);
-        } else if (std::strcmp(key, "ai_settings_control") == 0) {
-            loaded.aiSettingsControl = std::clamp(value, 0, 2);
         } else if (std::strcmp(key, "meanings_enabled") == 0) {
             loaded.meaningsEnabled = value != 0;
         } else if (std::strcmp(key, "meanings_in_ui_language") == 0) {
@@ -554,6 +577,8 @@ bool SqliteUserDictionaryRepository::LoadSettings(UserSettings& settings) const 
             loaded.japaneseIgnoreCapsLock = value != 0;
         } else if (std::strcmp(key, "japanese_numpad_direct") == 0) {
             loaded.japaneseNumpadDirect = value != 0;
+        } else if (std::strcmp(key, "japanese_cased_words") == 0) {
+            loaded.japaneseCasedWords = value != 0;
         } else if (std::strcmp(key, "mixed_typing_enabled") == 0) {
             loaded.mixedTypingEnabled = value != 0;
         } else if (std::strcmp(key, "japanese_english_spacing") == 0) {
@@ -599,16 +624,18 @@ bool SqliteUserDictionaryRepository::LoadSettings(UserSettings& settings) const 
     }
     if (success) settings = std::move(loaded);
     return success;
+    } catch (...) {
+        // Out of memory while loading: nothing loaded, rather than the
+        // process ended (the function is noexcept).
+        return false;
+    }
 }
 
 bool SqliteUserDictionaryRepository::SaveSettings(const UserSettings& settings) noexcept {
     if (!database_) return false;
     // Erased (uninstalled) since this was opened: what this process still
     // holds is not written back.
-    if (ErasedSince()) return false;
-    if (sqlite3_exec(database_, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK) {
-        return false;
-    }
+    if (!BeginWrite()) return false;
 
     bool success = true;
     sqlite3_stmt* statement = nullptr;
@@ -722,7 +749,6 @@ bool SqliteUserDictionaryRepository::SaveSettings(const UserSettings& settings) 
     saveValue("rainbow_accent", settings.rainbowAccent ? 1 : 0);
     saveValue("cat_sounds", settings.catSounds ? 1 : 0);
     saveValue("desktop_companion", settings.desktopCompanion ? 1 : 0);
-    saveValue("ai_settings_control", settings.aiSettingsControl);
     saveValue("mix_english_underline", settings.mixEnglishUnderline ? 1 : 0);
     saveValue("mix_live_conversion", settings.mixLiveConversion ? 1 : 0);
     saveValue("mix_ai", settings.mixAi ? 1 : 0);
@@ -730,6 +756,7 @@ bool SqliteUserDictionaryRepository::SaveSettings(const UserSettings& settings) 
     saveValue("no_learning_in_private", settings.noLearningInPrivate ? 1 : 0);
     saveValue("japanese_ignore_caps_lock", settings.japaneseIgnoreCapsLock ? 1 : 0);
     saveValue("japanese_numpad_direct", settings.japaneseNumpadDirect ? 1 : 0);
+    saveValue("japanese_cased_words", settings.japaneseCasedWords ? 1 : 0);
     saveValue("mixed_typing_enabled", settings.mixedTypingEnabled ? 1 : 0);
     saveValue("japanese_english_spacing", settings.japaneseEnglishSpacing ? 1 : 0);
     for (const auto& number : kMixStyleNumbers) {
@@ -757,14 +784,12 @@ bool SqliteUserDictionaryRepository::SaveSettings(const UserSettings& settings) 
         if (statement) sqlite3_finalize(statement);
     }
 
-    const char* transaction = success ? "COMMIT;" : "ROLLBACK;";
-    if (sqlite3_exec(database_, transaction, nullptr, nullptr, nullptr) != SQLITE_OK) {
-        success = false;
-    }
+    success = EndTransaction(database_, success);
     return success;
 }
 
 bool SqliteUserDictionaryRepository::LoadLearning(UserLearningStore& learning) const noexcept {
+    try {
     if (!database_) return false;
     sqlite3_stmt* statement = nullptr;
     constexpr const char* query =
@@ -812,14 +837,18 @@ bool SqliteUserDictionaryRepository::LoadLearning(UserLearningStore& learning) c
     }
     if (success) learning = std::move(loaded);
     return success;
+    } catch (...) {
+        // Out of memory while loading: nothing loaded, rather than the
+        // process ended (the function is noexcept).
+        return false;
+    }
 }
 
 bool SqliteUserDictionaryRepository::SaveLearning(const UserLearningStore& learning) noexcept {
     if (!database_) return false;
     // Erased (uninstalled) since this was opened: what this process still
     // holds is not written back.
-    if (ErasedSince()) return false;
-    if (sqlite3_exec(database_, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK) return false;
+    if (!BeginWrite()) return false;
     bool success = KeepChangeTimes(database_, "user_learning") &&
                    KeepChangeTimes(database_, "user_learning_preferences") &&
                    sqlite3_exec(database_,
@@ -871,8 +900,7 @@ bool SqliteUserDictionaryRepository::SaveLearning(const UserLearningStore& learn
     }
     success = success && StampChangeTimes(database_, "user_learning") &&
               StampChangeTimes(database_, "user_learning_preferences");
-    const char* transaction = success ? "COMMIT;" : "ROLLBACK;";
-    if (sqlite3_exec(database_, transaction, nullptr, nullptr, nullptr) != SQLITE_OK) success = false;
+    success = EndTransaction(database_, success);
     return success;
 }
 
@@ -885,6 +913,7 @@ bool SqliteUserDictionaryRepository::ResetLearning() noexcept {
 
 bool SqliteUserDictionaryRepository::LoadSocialLearning(
     SocialLearningStore& learning) const noexcept {
+    try {
     if (!database_) return false;
     sqlite3_stmt* statement = nullptr;
     constexpr const char* query =
@@ -910,6 +939,11 @@ bool SqliteUserDictionaryRepository::LoadSocialLearning(
     sqlite3_finalize(statement);
     if (success) learning = std::move(loaded);
     return success;
+    } catch (...) {
+        // Out of memory while loading: nothing loaded, rather than the
+        // process ended (the function is noexcept).
+        return false;
+    }
 }
 
 bool SqliteUserDictionaryRepository::SaveSocialLearning(
@@ -917,8 +951,7 @@ bool SqliteUserDictionaryRepository::SaveSocialLearning(
     if (!database_) return false;
     // Erased (uninstalled) since this was opened: what this process still
     // holds is not written back.
-    if (ErasedSince()) return false;
-    if (sqlite3_exec(database_, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK) return false;
+    if (!BeginWrite()) return false;
     bool success = KeepChangeTimes(database_, "social_learning") &&
                    sqlite3_exec(database_, "DELETE FROM social_learning;", nullptr, nullptr, nullptr) == SQLITE_OK;
     sqlite3_stmt* statement = nullptr;
@@ -941,8 +974,7 @@ bool SqliteUserDictionaryRepository::SaveSocialLearning(
     }
     if (statement) sqlite3_finalize(statement);
     success = success && StampChangeTimes(database_, "social_learning");
-    const char* transaction = success ? "COMMIT;" : "ROLLBACK;";
-    if (sqlite3_exec(database_, transaction, nullptr, nullptr, nullptr) != SQLITE_OK) success = false;
+    success = EndTransaction(database_, success);
     return success;
 }
 
@@ -982,8 +1014,7 @@ bool SqliteUserDictionaryRepository::SaveJapaneseLearning(
     if (!database_) return false;
     // Erased (uninstalled) since this was opened: what this process still
     // holds is not written back.
-    if (ErasedSince()) return false;
-    if (sqlite3_exec(database_, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK) return false;
+    if (!BeginWrite()) return false;
     bool success = KeepChangeTimes(database_, "japanese_learning") &&
                    sqlite3_exec(database_, "DELETE FROM japanese_learning;", nullptr, nullptr, nullptr) == SQLITE_OK;
     sqlite3_stmt* statement = nullptr;
@@ -1009,8 +1040,7 @@ bool SqliteUserDictionaryRepository::SaveJapaneseLearning(
     }
     if (statement) sqlite3_finalize(statement);
     success = success && StampChangeTimes(database_, "japanese_learning");
-    const char* transaction = success ? "COMMIT;" : "ROLLBACK;";
-    if (sqlite3_exec(database_, transaction, nullptr, nullptr, nullptr) != SQLITE_OK) success = false;
+    success = EndTransaction(database_, success);
     return success;
 }
 
@@ -1018,23 +1048,25 @@ bool SqliteUserDictionaryRepository::AddRecentConversion(const RecentConversion&
     if (!database_) return false;
     // Erased (uninstalled) since this was opened: what this process still
     // holds is not written back.
-    if (ErasedSince()) return false;
+    // Added and the list cut back to `keep` together, or neither: the list
+    // never grows past what it keeps.
+    if (!BeginWrite()) return false;
     sqlite3_stmt* statement = nullptr;
     constexpr const char* insert = "INSERT INTO conversion_history (reading, result, mode, at) VALUES (?, ?, ?, ?);";
-    if (sqlite3_prepare_v2(database_, insert, -1, &statement, nullptr) != SQLITE_OK) return false;
-    bool success = BindText16(statement, 1, conversion.reading) && BindText16(statement, 2, conversion.text) &&
+    bool success = sqlite3_prepare_v2(database_, insert, -1, &statement, nullptr) == SQLITE_OK &&
+                   BindText16(statement, 1, conversion.reading) && BindText16(statement, 2, conversion.text) &&
                    BindText16(statement, 3, conversion.mode) &&
                    sqlite3_bind_int64(statement, 4, conversion.time) == SQLITE_OK &&
                    sqlite3_step(statement) == SQLITE_DONE;
     sqlite3_finalize(statement);
+    statement = nullptr;
     constexpr const char* trim =
         "DELETE FROM conversion_history WHERE id NOT IN (SELECT id FROM conversion_history ORDER BY id DESC LIMIT ?);";
-    if (success && sqlite3_prepare_v2(database_, trim, -1, &statement, nullptr) == SQLITE_OK) {
-        success = sqlite3_bind_int64(statement, 1, static_cast<sqlite3_int64>(keep)) == SQLITE_OK &&
-                  sqlite3_step(statement) == SQLITE_DONE;
-        sqlite3_finalize(statement);
-    }
-    return success;
+    success = success && sqlite3_prepare_v2(database_, trim, -1, &statement, nullptr) == SQLITE_OK &&
+              sqlite3_bind_int64(statement, 1, static_cast<sqlite3_int64>(keep)) == SQLITE_OK &&
+              sqlite3_step(statement) == SQLITE_DONE;
+    sqlite3_finalize(statement);
+    return EndTransaction(database_, success);
 }
 
 bool SqliteUserDictionaryRepository::LoadRecentConversions(std::vector<RecentConversion>& conversions) const noexcept {
@@ -1074,14 +1106,20 @@ bool SqliteUserDictionaryRepository::EraseAll() noexcept {
                            -1, &statement, nullptr) != SQLITE_OK) {
         return false;
     }
-    while (sqlite3_step(statement) == SQLITE_ROW) {
+    int step = SQLITE_ROW;
+    while ((step = sqlite3_step(statement)) == SQLITE_ROW) {
         if (const auto* name = reinterpret_cast<const char*>(sqlite3_column_text(statement, 0))) tables.emplace_back(name);
     }
     sqlite3_finalize(statement);
+    // Every table listed, or nothing is erased (a busy or damaged database
+    // would stop the list part way).
+    if (step != SQLITE_DONE) return false;
     bool success = sqlite3_exec(database_, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) == SQLITE_OK;
     for (const auto& table : tables) {
         if (!success) break;
-        const std::string sql = "DELETE FROM \"" + table + "\";";
+        std::string quoted = "\"";
+        for (const char c : table) quoted += c == '"' ? std::string("\"\"") : std::string(1, c);
+        const std::string sql = "DELETE FROM " + quoted + "\";";
         success = sqlite3_exec(database_, sql.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK;
     }
     // A new mark: processes that opened the database before it was erased
@@ -1093,7 +1131,7 @@ bool SqliteUserDictionaryRepository::EraseAll() noexcept {
         const std::string sql = "INSERT INTO erasure (mark) VALUES (" + std::to_string(mark) + ");";
         success = sqlite3_exec(database_, sql.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK;
     }
-    success = sqlite3_exec(database_, success ? "COMMIT;" : "ROLLBACK;", nullptr, nullptr, nullptr) == SQLITE_OK && success;
+    success = EndTransaction(database_, success);
     if (success) eraseMark_ = mark;
     (void)sqlite3_exec(database_, "PRAGMA wal_checkpoint(TRUNCATE);", nullptr, nullptr, nullptr);
     return success;
@@ -1146,8 +1184,7 @@ bool SqliteUserDictionaryRepository::SaveJapaneseUserWords(const std::vector<jap
     if (!database_) return false;
     // Erased (uninstalled) since this was opened: what this process still
     // holds is not written back.
-    if (ErasedSince()) return false;
-    if (sqlite3_exec(database_, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK) return false;
+    if (!BeginWrite()) return false;
     bool success =
         sqlite3_exec(database_, "DELETE FROM japanese_user_words;", nullptr, nullptr, nullptr) == SQLITE_OK;
     sqlite3_stmt* statement = nullptr;
@@ -1170,8 +1207,7 @@ bool SqliteUserDictionaryRepository::SaveJapaneseUserWords(const std::vector<jap
         success = false;
     }
     if (statement) sqlite3_finalize(statement);
-    const char* transaction = success ? "COMMIT;" : "ROLLBACK;";
-    if (sqlite3_exec(database_, transaction, nullptr, nullptr, nullptr) != SQLITE_OK) success = false;
+    success = EndTransaction(database_, success);
     return success;
 }
 
@@ -1191,8 +1227,7 @@ bool SqliteUserDictionaryRepository::DeleteLearningSince(std::int64_t since) noe
         if (statement) sqlite3_finalize(statement);
         if (!success) break;
     }
-    const char* transaction = success ? "COMMIT;" : "ROLLBACK;";
-    if (sqlite3_exec(database_, transaction, nullptr, nullptr, nullptr) != SQLITE_OK) success = false;
+    success = EndTransaction(database_, success);
     return success;
 }
 

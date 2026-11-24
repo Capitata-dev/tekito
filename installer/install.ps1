@@ -35,7 +35,9 @@ param(
     [switch]$SkipRegistration,
     [switch]$SkipPrerequisiteCheck,
     [ValidateSet("all", "data", "program", "finish")]
-    [string]$Part = "all"
+    [string]$Part = "all",
+    # Where setup reads how far the install is: "<stage> <fraction>".
+    [string]$ProgressFile = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -143,6 +145,50 @@ function Add-InputMethodTip($Languages, [string]$LanguageTag, [string]$Tip) {
     return $true
 }
 
+# How far the install is, for setup's progress bar: the stage (check,
+# download, unpack, packs, program, finish, ai) and how much of it is done
+# (0 to 1). Nothing when setup did not ask; never stops the install.
+function Set-SetupProgress([string]$Stage, [double]$Done) {
+    if (-not $ProgressFile) { return }
+    try {
+        $text = $Stage + " " + [Math]::Min(1.0, [Math]::Max(0.0, $Done)).ToString("0.000", [Globalization.CultureInfo]::InvariantCulture)
+        [IO.File]::WriteAllText($ProgressFile, $text, [Text.Encoding]::ASCII)
+    } catch { }
+}
+
+# A download read a piece at a time, telling setup how much has come.
+function Save-Download([string]$Url, [string]$Path) {
+    $request = [Net.HttpWebRequest]::Create($Url)
+    $request.UserAgent = "TEKITO setup"
+    $response = $request.GetResponse()
+    try {
+        $total = $response.ContentLength
+        $from = $response.GetResponseStream()
+        $to = [IO.File]::Create($Path)
+        try {
+            $buffer = New-Object byte[] 1048576
+            $done = [long]0
+            $told = -1
+            while (($read = $from.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                $to.Write($buffer, 0, $read)
+                $done += $read
+                if ($total -gt 0) {
+                    $permille = [int][Math]::Floor(1000.0 * $done / $total)
+                    if ($permille -ne $told) {
+                        $told = $permille
+                        Set-SetupProgress "download" ($done / $total)
+                    }
+                }
+            }
+        } finally {
+            $to.Dispose()
+            $from.Dispose()
+        }
+    } finally {
+        $response.Close()
+    }
+}
+
 # The Japanese Data Packs, downloaded (or copied) and checked, unpacked into
 # a new folder. Exits with 20 or 21 when they cannot be had.
 function Get-JapaneseData($Manifest, [string]$LocalZip) {
@@ -158,22 +204,25 @@ function Get-JapaneseData($Manifest, [string]$LocalZip) {
             Write-Host "Downloading $($info.url)"
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor
                 [Net.SecurityProtocolType]::Tls12
-            $ProgressPreference = "SilentlyContinue"
-            Invoke-WebRequest -Uri ([string]$info.url) -OutFile $zip -UseBasicParsing
+            Save-Download ([string]$info.url) $zip
         }
     } catch {
         Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
         Write-Host "The Japanese data could not be downloaded: $($_.Exception.Message)"
         exit 20
     }
+    Set-SetupProgress "unpack" 0
     if ($info -and (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToUpperInvariant() -ne
         ([string]$info.sha256).ToUpperInvariant()) {
         Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
         Write-Host "The Japanese data does not match this package."
         exit 21
     }
+    Set-SetupProgress "unpack" 0.4
     $packs = Join-Path $root "packs"
+    $ProgressPreference = "SilentlyContinue"
     Expand-Archive -LiteralPath $zip -DestinationPath $packs -Force
+    Set-SetupProgress "unpack" 1
     return $packs
 }
 
@@ -190,6 +239,7 @@ $packageManifestPath = Join-Path $SourceRoot "package-manifest.json"
 $packageManifest = if (Test-Path -LiteralPath $packageManifestPath) {
     Get-Content -LiteralPath $packageManifestPath -Raw | ConvertFrom-Json
 } else { $null }
+if ($doData) { Set-SetupProgress "check" 0 }
 if ($doData -and -not $SkipPrerequisiteCheck) { & (Join-Path $SourceRoot "check-prerequisites.ps1") }
 
 if ($doProgram) {
@@ -232,6 +282,7 @@ if ($doProgram) {
 $japaneseData = $null
 if ($JapaneseDataPath) { $Japanese = $true }
 if ($doData -and $Japanese -and -not $SkipDataPacks) {
+    Set-SetupProgress "download" 0
     $japaneseData = Get-JapaneseData $packageManifest $JapaneseDataPath
 }
 
@@ -244,12 +295,16 @@ try {
     if ($doData) {
         Get-Process -Name TEKITO -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         if (-not $SkipDataPacks) {
+            Set-SetupProgress "packs" 0
             & (Join-Path $SourceRoot "scripts\install-data-packs.ps1") `
                 -SourceRoot (Join-Path $SourceRoot "data") -DestinationRoot $dataRoot
             if ($japaneseData) {
+                Set-SetupProgress "packs" 0.3
                 & (Join-Path $SourceRoot "scripts\install-data-packs.ps1") -SourceRoot $japaneseData -DestinationRoot $dataRoot
             }
+            Set-SetupProgress "packs" 0.9
             Grant-AppContainerRead $dataRoot
+            Set-SetupProgress "packs" 1
         }
     }
 
@@ -258,6 +313,7 @@ try {
     if ($doProgram) {
         # Staged first so a failure leaves the old installation alone: beside
         # the install folder in Program Files, where only administrators write.
+        Set-SetupProgress "program" 0
         $stagingParent = if ($SkipRegistration) { [IO.Path]::GetTempPath() } else { Split-Path $installRoot -Parent }
         $stagingRoot = Join-Path $stagingParent ("TEKITO.staging-" + [guid]::NewGuid().ToString("N"))
         New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
@@ -283,8 +339,10 @@ try {
         Remove-InstalledFiles $installRoot
         New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
         if (-not $SkipRegistration) { Protect-InstallFolder $installRoot }
+        Set-SetupProgress "program" 0.4
         Copy-Item -Path (Join-Path $stagingRoot "*") -Destination $installRoot -Recurse -Force
         Grant-AppContainerRead $installRoot
+        Set-SetupProgress "program" 0.8
 
         if (-not $SkipRegistration) {
             $code = Invoke-Regsvr32 @('/s', $installedDll)
@@ -303,6 +361,7 @@ try {
     # The user's part, last: the keyboard list, the Start menu, Installed
     # apps and the AI model, for the user who uses TEKITO.
     if ($doFinish) {
+        Set-SetupProgress "finish" 0
         if (-not $SkipRegistration) {
             # With Japanese, one TEKITO is enough: the Japanese one also types
             # English in Auto and Direct.
@@ -341,7 +400,11 @@ try {
         # turns it on. Not getting it does not stop the install.
         if ($AiModel -and $Japanese -and -not $SkipDataPacks) {
             Write-Host "Downloading the AI model ($AiModel)"
+            Set-SetupProgress "ai" 0
+            # TEKITO.exe tells setup how much of the model has come.
+            if ($ProgressFile) { $env:TEKITO_PROGRESS_FILE = $ProgressFile }
             $ai = Start-Process -FilePath $installedApp -ArgumentList @("--install-ai", $AiModel) -Wait -PassThru
+            Set-SetupProgress "finish" 0.9
             if ($ai.ExitCode -ne 0) {
                 Write-Host "The AI model could not be installed ($($ai.ExitCode))."
                 $aiFailed = $true

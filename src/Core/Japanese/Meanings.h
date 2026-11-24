@@ -59,6 +59,10 @@ public:
 private:
     [[nodiscard]] std::optional<Meaning> Japanese(const SortedTsv& source, std::wstring_view text,
                                                   std::wstring_view reading) const;
+    // The meaning one row of `source` gives `word`; none when it only
+    // points to entries that are not there.
+    [[nodiscard]] std::optional<Meaning> Senses(const SortedTsv& source, std::wstring_view word,
+                                                const std::vector<std::string_view>& row) const;
     [[nodiscard]] std::optional<Meaning> English(std::wstring_view word) const;
     // An English word's meaning in `language` as it is (no other form).
     [[nodiscard]] std::optional<Meaning> Latin(std::wstring_view word, MeaningLanguage language) const;

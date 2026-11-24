@@ -3,6 +3,7 @@
 #include "Core/Japanese/ChunkJudge.h"
 #include "Core/Japanese/JapaneseConverter.h"
 #include "Core/Japanese/KanjiSets.h"
+#include "Core/Japanese/SentenceReranker.h"
 #include "Core/SpecialConversions.h"
 
 #include <array>
@@ -28,7 +29,6 @@ class JapaneseUserDictionary;
 class Loanwords;
 class PostalCodes;
 class RomajiTable;
-class SentenceReranker;
 class AiJudge;
 class KanaSlips;
 
@@ -101,6 +101,18 @@ enum SentenceFeature : std::size_t {
     kSentenceFeatures
 };
 
+// The Japanese (and Mix) composition: keys in, kana, conversion, candidates,
+// committed text out. Its code is split by module:
+//   JapaneseComposer.cpp       settings, committing, context, what shows
+//   ComposerTyping.cpp         keys to kana, the caret, deleting
+//   ComposerLive.cpp           live conversion
+//   ComposerPredictions.cpp    predictions, forgetting what was learned
+//   ComposerConversion.cpp     reading to phrases, moving between them
+//   ComposerCandidates.cpp     what a candidate list holds and its order
+//   ComposerSlips.cpp          slips undone
+//   ComposerSentenceCheck.cpp  the sentence model and the AI choosing
+//   ComposerMix.cpp            Mix: Japanese and English chunks
+//   ComposerShared.h           helpers those files share
 class JapaneseComposer final {
 public:
     explicit JapaneseComposer(const RomajiTable* table = nullptr) noexcept : table_(table) {}
@@ -118,8 +130,23 @@ public:
     // English words for katakana candidates (ミーティング -> meeting), offered
     // right after them; nullptr offers none.
     void SetLoanwords(const Loanwords* loanwords) noexcept { loanwords_ = loanwords; }
+    // How a word in small letters is written, when with capitals (iphone:
+    // iPhone); and whether a word written so with a small letter first
+    // stays as typed (iPhone, macOS: not いPhone, まcOS).
+    void SetWrittenAs(std::function<std::optional<std::wstring>(std::wstring_view)> writtenAs) {
+        writtenAs_ = std::move(writtenAs);
+    }
+    void SetCasedWords(bool on) noexcept { casedWords_ = on; }
+    // Japanese mode: the part of speech kana after letters as typed follow
+    // (a noun's: NHKの, SNSに), and how letters typed may be written as a
+    // name, offered after them (IPS: iPS).
+    void SetLetterContext(std::uint16_t context) noexcept { letterContext_ = context; }
+    void SetLetterNames(std::function<std::vector<std::wstring>(std::wstring_view)> names) {
+        letterNames_ = std::move(names);
+    }
     // Candidates use only kanji in `range` (教育, 常用, 人名用 from `sets`).
     void SetKanjiSets(const KanjiSets* sets) noexcept { kanjiSets_ = sets; }
+    [[nodiscard]] const KanjiSets* KanjiSetsInUse() const noexcept { return kanjiSets_; }
     void SetKanjiRange(KanjiRange range, int grade = 6, bool names = false) noexcept {
         kanjiRange_ = range;
         kanjiGrade_ = grade;
@@ -183,7 +210,8 @@ public:
     // write the keys typed, and takes the one that reads better by more
     // than `margin` nats. `keepNotation`: not one that only writes the
     // chosen text otherwise. Enter waits for the answer (about 0.1 s on a
-    // GPU, 0.4 s on a processor) up to the judge's own wait. `count`: how
+    // GPU, 0.4 s on a processor) half a second at most; later, the sentence
+    // is committed as the sentence check chose it. `count`: how
     // many texts it reads (fewer answer sooner).
     void SetMixAi(bool on, double margin = 4.0, bool keepNotation = true, std::size_t count = 16) noexcept {
         mixAi_ = on;
@@ -268,6 +296,20 @@ public:
     // The mark just typed ends the text there (SetCommitAtPunctuation):
     // not after digits or letters (1.5, v1.0) nor in an address.
     [[nodiscard]] bool EndsAtPunctuation() const;
+    // EndsAtPunctuation: the text before the mark committed, converted as
+    // Space converts it; the mark (typed with `key`) stays, converted on its
+    // own, so Space shows its other forms (．, ., …). What was committed.
+    [[nodiscard]] std::wstring CommitBeforeMark(wchar_t key);
+    // The mark CommitBeforeMark left is all there is; Untouched: as it was
+    // left (its list not opened, nothing else chosen).
+    [[nodiscard]] bool MarkLeft() const noexcept {
+        return markLeft_ && IsConverted() && phrases_.size() == 1;
+    }
+    [[nodiscard]] bool MarkLeftUntouched() const noexcept {
+        return MarkLeft() && !listOpen_ && phrases_.front().selected == 0;
+    }
+    // The mark left, dropped (Backspace takes it in one press).
+    void DropMark() noexcept;
     [[nodiscard]] bool SlipAutoApply() const noexcept { return slipAutoApply_; }
     // The first emoji for a reading shown on the first page of its list
     // (off: with the other symbols, last).
@@ -632,6 +674,9 @@ private:
         int letterCase{0};
         // The list has been given what the keys mean with a slip undone.
         bool slipsAdded{false};
+        // The sentence check or the AI chose a candidate further down, now
+        // first (PutShownFirst): a Mix chunk keeps it on Enter, as one picked.
+        bool chosenByCheck{false};
         // The chunk candidates were looked for, as the list opened: not again
         // for each candidate picked after (the sentence shown then is another).
         bool chunksTried{false};
@@ -644,6 +689,19 @@ private:
     void Feed(wchar_t key);
     // Letters after a capital stay letters; whether `key` was taken so.
     bool FeedAscii(wchar_t key);
+    void TakeCasedWord();
+    // Each phrase's candidate shown first in its list (after the sentence
+    // check or the AI chose it).
+    void PutShownFirst();
+    // A list's first page for words (TidyFirstPage's own comment says how).
+    void TidyFirstPage(PhraseState& phrase) const;
+    // Whether letters typed after a capital end the word they spell as it is
+    // written, `key` starting no English word after it (Zoom then d).
+    [[nodiscard]] bool LettersWordDone(wchar_t key) const;
+    // Mix: English typed with capitals and Japanese after it without a
+    // space (NHKno, Zoomde) become two chunks, as Space would make them.
+    void SplitAfterCapitals();
+    [[nodiscard]] static std::wstring ForSentenceModel(std::wstring text);
     [[nodiscard]] bool HasAscii() const noexcept;
     // reading from `from` on, converted (letters after a capital as typed).
     [[nodiscard]] std::vector<Phrase> ConvertReading(const std::wstring& reading, std::size_t from,
@@ -693,7 +751,12 @@ private:
     void ConvertJapaneseRuns();
     // The likeliest sentences the phrases' candidates make, checked as a
     // whole (SetSentenceReranker); the one taken is selected.
-    void CheckSentence();
+    // `typingOn`: while typing on, without the AI and without whole texts
+    // read with other breaks (those take longest).
+    void CheckSentence(bool typingOn = false);
+    // Live: the sentence so far checked before phrases stay as they show;
+    // whether it reads it otherwise than shown.
+    bool CheckBeforeSettling();
     // Each phrase's list ends with what was typed in every form: hiragana,
     // katakana, half-width katakana and the keys in full and half width
     // (what F6-F10 give), for people who look for them there.
@@ -876,6 +939,10 @@ private:
     int notationLevel_{3};
     const KeyConverter* keyConverter_{nullptr};
     const Loanwords* loanwords_{nullptr};
+    std::function<std::optional<std::wstring>(std::wstring_view)> writtenAs_;
+    bool casedWords_{false};
+    std::uint16_t letterContext_{0};
+    std::function<std::vector<std::wstring>(std::wstring_view)> letterNames_;
     const ChunkJudge* chunkJudge_{nullptr};
     const EnglishSpelling* englishSpelling_{nullptr};
     bool englishCorrection_{true};
@@ -894,6 +961,9 @@ private:
         std::wstring japanese;  // as Japanese
         // Its other conversions, for the sentence check (japanese first).
         std::vector<std::wstring> japaneseChoices;
+        // Its whole reading broken elsewhere (何|時ですか for 何|児ですか),
+        // read beside the others as Japanese mode's check reads them.
+        std::vector<std::wstring> japaneseWholes;
         bool isEnglish{false};
         bool marksOnly{false};  // punctuation of its own (a "." after English)
         bool locked{false};     // picked from the list or typed with capitals
@@ -952,6 +1022,23 @@ private:
     [[nodiscard]] std::optional<std::wstring> TypedWithCapitals(std::wstring_view keys) const;
     // The chunk judge's judgement of `keys`, with SetSingleVowelKana.
     [[nodiscard]] ChunkJudge::Judgement JudgeChunk(std::wstring_view keys) const;
+    // The chunk judge's last judgements, by all it was given: the text and
+    // the caret shown after a key each ask for the same keys, and judging
+    // long keys costs much.
+    struct JudgedKeys {
+        std::wstring keys;
+        std::size_t englishRun;
+        bool japaneseInSentence;
+        const EnglishSpelling* spelling;
+        std::wstring englishText;
+        bool spaceless;
+        const ChunkJudge* judge;
+        ChunkJudge::Judgement judged;
+    };
+    mutable std::vector<JudgedKeys> judgedKeys_;
+    // What the sentence check read of this sentence so far: read again at
+    // each pause, its start is not read again.
+    mutable SentenceReranker::Memory rerankerMemory_;
     // A chunk that reads both ways takes the language the user chose for
     // it before (learning: game picked as English over げめ, or 褒め over
     // home), when that was learned.
@@ -984,7 +1071,7 @@ private:
     bool dropSpaceBefore_{false};
     const JapaneseUserDictionary* userDictionary_{nullptr};
     const SpecialConversions* special_{nullptr};
-    std::size_t pageSize_{9};
+    std::size_t pageSize_{12};
     const PostalCodes* postalCodes_{nullptr};
     SpecialConversionOptions specialOptions_;
     JapaneseLearningStore* learning_{nullptr};
@@ -1022,6 +1109,13 @@ private:
     // MixLiveText's last conversion, by the reading it was for.
     mutable std::wstring mixLiveReading_;
     mutable std::wstring mixLiveText_;
+    // Its phrases, and the context it was converted after: typed on, the
+    // phrases before the last few stay (MixLiveText).
+    mutable std::vector<Phrase> mixLivePhrases_;
+    mutable std::uint16_t mixLiveContext_{0};
+    // The chunk being typed after English alone read clearly as Japanese
+    // (TypedLetters): it stays so while it is typed on.
+    mutable bool japaneseAfterEnglish_{false};
     const KanaSlips* slips_{nullptr};
     std::vector<Unit> units_;
     // Units before the caret; pending keys belong at the caret.
@@ -1138,6 +1232,8 @@ private:
     // with the letter delay).
     [[nodiscard]] std::wstring DisplayTyping() const;
     bool commitAtPunctuation_{false};
+    // CommitBeforeMark left a mark (MarkLeft).
+    bool markLeft_{false};
     // StepBack showed the keys typed: Esc again drops everything.
     bool keysShown_{false};
     // StepBack showed the kana for Mix's live conversion: typing brings the

@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -60,6 +61,9 @@ public:
 
     // A character the dictionary never uses becomes 0, which no key contains.
     [[nodiscard]] ReadingCodes Encode(std::wstring_view reading) const;
+    // Whether no two characters have the same code: a key's record then
+    // names the one reading it is for.
+    [[nodiscard]] bool OneCodeEachCharacter() const noexcept { return oneCodeEach_; }
 
     // For each key that is a prefix of `codes`, shortest first:
     // found(length, record).
@@ -118,6 +122,22 @@ private:
     // The words added after this file's (AddWords), and which they are.
     std::unique_ptr<JapaneseDictionary> added_;
     std::uint8_t depth_{0};
+    // The keys starting with each code, and with each two codes, as ranges
+    // [first, end): a search starts from them, not from all the keys (the
+    // widest searches, a read of the file at each step). Made on opening
+    // (MakeStartRanges); empty when the keys are not in order, and the
+    // search then narrows them from all the keys.
+    struct SecondRange {
+        std::uint8_t code;
+        std::uint32_t first, end;
+    };
+    void MakeStartRanges();
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> firstRanges_;
+    // secondRanges_[secondStart_[c] .. secondStart_[c + 1]): those after
+    // first code c, by second code.
+    std::vector<SecondRange> secondRanges_;
+    std::vector<std::uint32_t> secondStart_;
+    bool oneCodeEach_{false};
 };
 
 template <typename Found>
@@ -149,9 +169,30 @@ template <typename Found>
 void JapaneseDictionary::SearchKeys(ReadingCodesView codes, Found&& found) const {
     std::uint32_t lo = 0;
     std::uint32_t hi = keyCount_;
+    std::size_t depth = 0;
+    // The first two codes from the ranges made on opening.
+    if (!firstRanges_.empty() && !codes.empty() && codes[0] != 0) {
+        std::tie(lo, hi) = firstRanges_[codes[0]];
+        if (lo < hi && Key(lo).size() == 1) found(1, lo);
+        depth = 1;
+        if (lo < hi && codes.size() > 1 && codes[1] != 0) {
+            const auto begin = secondRanges_.begin() + secondStart_[codes[0]];
+            const auto end = secondRanges_.begin() + secondStart_[codes[0] + 1u];
+            const auto at = std::lower_bound(begin, end, codes[1],
+                                             [](const SecondRange& range, std::uint8_t code) { return range.code < code; });
+            if (at != end && at->code == codes[1]) {
+                lo = at->first;
+                hi = at->end;
+            } else {
+                hi = lo;
+            }
+            if (lo < hi && Key(lo).size() == 2) found(2, lo);
+            depth = 2;
+        }
+    }
     // Keys in [lo, hi) share the first `depth` codes; narrow them to those
     // whose next code is codes[depth].
-    for (std::size_t depth = 0; depth < codes.size() && lo < hi; ++depth) {
+    for (; depth < codes.size() && lo < hi; ++depth) {
         const std::uint8_t code = codes[depth];
         if (code == 0) break;
         const auto codeAt = [&](std::uint32_t record) -> int {

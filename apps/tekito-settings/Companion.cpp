@@ -1,5 +1,8 @@
 #include "apps/tekito-settings/Companion.h"
 
+#include "apps/tekito-settings/CompanionBubble.h"
+#include "apps/tekito-settings/CompanionLookup.h"
+
 #include "apps/tekito-settings/CompanionShapes.h"
 #include "UserData/RuntimeModeState.h"
 #include "UserData/UiLanguage.h"
@@ -7,10 +10,13 @@
 #include "UserData/UserSettings.h"
 
 #include <d2d1_1.h>
+#include <ole2.h>
 #include <shellapi.h>
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <atomic>
+#include <functional>
 #include <chrono>
 #include <climits>
 #include <cmath>
@@ -81,8 +87,118 @@ constexpr float kZPen = 18.0f;
 // Dragged, it swings against the way it goes, up to this much.
 constexpr float kSwingDegrees = 14.0f;
 
+// Its menu's items; a mode's is kMenuMode plus the mode.
 constexpr UINT kMenuSettings = 1;
 constexpr UINT kMenuHide = 2;
+constexpr UINT kMenuSecret = 3;
+constexpr UINT kMenuWords = 4;
+constexpr UINT kMenuReport = 5;
+constexpr UINT kMenuLookUp = 6;
+constexpr UINT kMenuMode = 16;
+
+// The mode it shows with its color, as the taskbar's mode icons: Auto blue
+// (its own), Mix orange, Japanese navy; grey with no conversion (Direct)
+// and on another language's keyboard.
+enum class Shown { Auto, Mixed, Japanese, Off };
+struct Look {
+    tekito::companion::Stop body[5];
+    tekito::companion::Stop ring[2];
+};
+constexpr Look kLooks[] = {
+    {{{0.0f, 0xa6c8ff}, {0.3f, 0x3f88ff}, {0.55f, 0x0668ff}, {0.75f, 0x0590ff}, {1.0f, 0x00dcff}},
+     {{0.0f, 0x6fe8ff}, {1.0f, 0x10b6fe}}},
+    {{{0.0f, 0xffe1a6}, {0.3f, 0xffab3f}, {0.55f, 0xf7891e}, {0.75f, 0xf9a826}, {1.0f, 0xfbe320}},
+     {{0.0f, 0xfff08a}, {1.0f, 0xf7b21e}}},
+    {{{0.0f, 0x8b98c8}, {0.3f, 0x34428a}, {0.55f, 0x16205a}, {0.75f, 0x1f3070}, {1.0f, 0x3f63b8}},
+     {{0.0f, 0x9fb4ff}, {1.0f, 0x5470d8}}},
+    {{{0.0f, 0xe4e4e4}, {0.3f, 0xb9b9b9}, {0.55f, 0x9b9b9b}, {0.75f, 0xa9a9a9}, {1.0f, 0xcdcdcd}},
+     {{0.0f, 0xe0e0e0}, {1.0f, 0xa0a0a0}}},
+};
+
+// Text, from a drop or the clipboard: as much as a word or a phrase needs.
+constexpr std::size_t kMostText = 512;
+
+std::optional<std::wstring> TextOf(IDataObject* data) {
+    FORMATETC format{CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM medium{};
+    if (!data || FAILED(data->GetData(&format, &medium))) return std::nullopt;
+    std::optional<std::wstring> text;
+    if (const auto* chars = static_cast<const wchar_t*>(GlobalLock(medium.hGlobal))) {
+        const std::size_t most = std::min<std::size_t>(GlobalSize(medium.hGlobal) / sizeof(wchar_t), kMostText);
+        text = std::wstring(chars, std::find(chars, chars + most, L'\0'));
+        GlobalUnlock(medium.hGlobal);
+    }
+    ReleaseStgMedium(&medium);
+    return text;
+}
+
+std::optional<std::wstring> ClipboardText(HWND owner) {
+    if (!OpenClipboard(owner)) return std::nullopt;
+    std::optional<std::wstring> text;
+    if (HANDLE handle = GetClipboardData(CF_UNICODETEXT)) {
+        if (const auto* chars = static_cast<const wchar_t*>(GlobalLock(handle))) {
+            const std::size_t most = std::min<std::size_t>(GlobalSize(handle) / sizeof(wchar_t), kMostText);
+            text = std::wstring(chars, std::find(chars, chars + most, L'\0'));
+            GlobalUnlock(handle);
+        }
+    }
+    CloseClipboard();
+    return text;
+}
+
+// Text dropped on it (a word dragged from a page or a document): taken as a
+// copy, nothing moved from where it was.
+class TextDrop final : public IDropTarget {
+public:
+    TextDrop(std::function<void(bool)> hovering, std::function<void(std::wstring)> dropped)
+        : hovering_(std::move(hovering)), dropped_(std::move(dropped)) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** out) override {
+        if (!out) return E_POINTER;
+        if (id == IID_IUnknown || id == IID_IDropTarget) {
+            *out = static_cast<IDropTarget*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++references_; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG left = --references_;
+        if (left == 0) delete this;
+        return left;
+    }
+    HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD, POINTL, DWORD* effect) override {
+        FORMATETC format{CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+        accepts_ = data && data->QueryGetData(&format) == S_OK;
+        *effect = accepts_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+        if (accepts_) hovering_(true);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DragOver(DWORD, POINTL, DWORD* effect) override {
+        *effect = accepts_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DragLeave() override {
+        hovering_(false);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Drop(IDataObject* data, DWORD, POINTL, DWORD* effect) override {
+        hovering_(false);
+        *effect = DROPEFFECT_NONE;
+        if (auto text = TextOf(data)) {
+            *effect = DROPEFFECT_COPY;
+            dropped_(std::move(*text));
+        }
+        return S_OK;
+    }
+
+private:
+    std::function<void(bool)> hovering_;
+    std::function<void(std::wstring)> dropped_;
+    std::atomic<ULONG> references_{1};
+    bool accepts_{false};
+};
 
 std::wstring AppPath() {
     std::wstring path(MAX_PATH, L'\0');
@@ -250,6 +366,10 @@ public:
         if (GetEnvironmentVariableW(L"TEKITO_COMPANION_IDLE", idle, 16) > 0) forcedIdleMs_ = _wtoi(idle) * 1000;
         // TEKITO_COMPANION_NO_SECRET=1: as if secret mode were off.
         noSecret_ = GetEnvironmentVariableW(L"TEKITO_COMPANION_NO_SECRET", nullptr, 0) > 0;
+        // TEKITO_COMPANION_LOOK=<0-3>: in Auto's, Mix's, Japanese mode's or
+        // no conversion's colors, whatever the mode.
+        wchar_t look[4]{};
+        if (GetEnvironmentVariableW(L"TEKITO_COMPANION_LOOK", look, 4) > 0) forcedLook_ = std::clamp(_wtoi(look), 0, 3);
         // TEKITO_COMPANION_FIDGETS=1: something of its own every 2 to 3 seconds.
         if (GetEnvironmentVariableW(L"TEKITO_COMPANION_FIDGETS", nullptr, 0) > 0) fidgetEvery_ = {2.0, 3.0};
 #endif
@@ -276,11 +396,28 @@ public:
         hwnd_ = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, kWindowClass,
                                 L"TEKITO", WS_POPUP, at.x, at.y, 1, 1, nullptr, nullptr, instance, this);
         if (!hwnd_) return false;
+        (void)bubble_.Create(instance);
+        drop_ = new TextDrop([this](bool on) { dropHover_ = on; },
+                             [this](std::wstring text) { LookUpAndSay(text); });
+        (void)RegisterDragDrop(hwnd_, drop_);
         Resize(GetDpiForWindow(hwnd_));
         if (!KeepOnScreen(saved_)) MoveTo(DefaultPlace());
         motion_ = AnimationsEnabled();
         Check();
         SetTimer(hwnd_, kCheckTimer, kCheckMilliseconds, nullptr);
+#ifndef NDEBUG
+        // TEKITO_COMPANION_SAY=<title>|<body>: a note beside it at first.
+        std::wstring say(256, L'\0');
+        say.resize(GetEnvironmentVariableW(L"TEKITO_COMPANION_SAY", say.data(), static_cast<DWORD>(say.size())));
+        if (!say.empty()) {
+            const auto bar = say.find(L'|');
+            Say(say.substr(0, bar), bar == std::wstring::npos ? std::wstring{} : say.substr(bar + 1), 60.0);
+        }
+        // TEKITO_COMPANION_LOOKUP=<word>: that word looked up at first.
+        std::wstring word(256, L'?');
+        word.resize(GetEnvironmentVariableW(L"TEKITO_COMPANION_LOOKUP", word.data(), static_cast<DWORD>(word.size())));
+        if (!word.empty()) LookUpAndSay(word);
+#endif
         return true;
     }
 
@@ -322,6 +459,7 @@ private:
                 GetCursorPos(&now);
                 if (!dragging_ && (std::abs(now.x - pressedAt_.x) > kDragSlop || std::abs(now.y - pressedAt_.y) > kDragSlop)) {
                     dragging_ = true;
+                    bubble_.Hide();
                 }
                 if (dragging_) MoveTo({pressedPlace_.x + now.x - pressedAt_.x, pressedPlace_.y + now.y - pressedAt_.y});
             }
@@ -335,6 +473,7 @@ private:
                     if (!KeepOnScreen(place_)) MoveTo(DefaultPlace());
                     SavePlace();
                 } else {
+                    SwitchMode();
                     Cheer();
                 }
             }
@@ -357,6 +496,11 @@ private:
             if (!KeepOnScreen(place_)) MoveTo(DefaultPlace());
             return 0;
         case WM_DESTROY:
+            if (drop_) {
+                RevokeDragDrop(hwnd);
+                drop_->Release();
+                drop_ = nullptr;
+            }
             PostQuitMessage(0);
             return 0;
         default:
@@ -417,14 +561,17 @@ private:
         return zBrush_ && SUCCEEDED(target_->CreateSolidColorBrush(Color(0xffffff), &white_));
     }
 
-    // The gradients, turned to `hue` degrees while Rainbow is on.
-    void EnsureBrushes(float turn) {
-        if (turn == brushHue_ && bodyBrush_) return;
+    // The gradients in `look`'s colors, turned to `hue` degrees while
+    // Rainbow is on.
+    void EnsureBrushes(float turn, Shown look) {
+        if (turn == brushHue_ && look == brushLook_ && bodyBrush_) return;
         using namespace tekito::companion;
         brushHue_ = turn;
-        D2D1_GRADIENT_STOP stops[std::size(kBodyStops)];
-        for (std::size_t i = 0; i < std::size(kBodyStops); ++i) {
-            stops[i] = {kBodyStops[i].offset, Turned(Color(kBodyStops[i].rgb), turn)};
+        brushLook_ = look;
+        const Look& colors = kLooks[static_cast<int>(look)];
+        D2D1_GRADIENT_STOP stops[std::size(colors.body)];
+        for (std::size_t i = 0; i < std::size(colors.body); ++i) {
+            stops[i] = {colors.body[i].offset, Turned(Color(colors.body[i].rgb), turn)};
         }
         ComPtr<ID2D1GradientStopCollection> collection;
         target_->CreateGradientStopCollection(stops, static_cast<UINT32>(std::size(stops)), &collection);
@@ -436,9 +583,9 @@ private:
             D2D1::LinearGradientBrushProperties(D2D1::Point2F(0.1f, 0.05f), D2D1::Point2F(0.9f, 0.95f)),
             D2D1::BrushProperties(1.0f, box), collection.Get(), &bodyBrush_);
 
-        D2D1_GRADIENT_STOP ring[std::size(kRingStops)];
-        for (std::size_t i = 0; i < std::size(kRingStops); ++i) {
-            ring[i] = {kRingStops[i].offset, Turned(Color(kRingStops[i].rgb), turn)};
+        D2D1_GRADIENT_STOP ring[std::size(colors.ring)];
+        for (std::size_t i = 0; i < std::size(colors.ring); ++i) {
+            ring[i] = {colors.ring[i].offset, Turned(Color(colors.ring[i].rgb), turn)};
         }
         collection.Reset();
         target_->CreateGradientStopCollection(ring, static_cast<UINT32>(std::size(ring)), &collection);
@@ -493,7 +640,7 @@ private:
         Fidget(t, sleepy);
         Follow(t, sleepy);
         const bool happy = t < happyUntil_;
-        const bool listening = !happy && (hover_ || dragging_);
+        const bool listening = !happy && (hover_ || dragging_ || dropHover_);
         const bool blink = !secret_ && !happy && !sleepy && std::fmod(t, kBlinkPeriod) / kBlinkPeriod > 0.93;
 
         // Swinging against the way it is dragged, and back.
@@ -556,7 +703,8 @@ private:
         target_->BeginDraw();
         target_->Clear(D2D1::ColorF(0, 0, 0, 0));
         const float turn = rainbow_ ? static_cast<float>(std::fmod(t / kRainbowPeriod, 1.0) * 360.0) : 0.0f;
-        EnsureBrushes(rainbow_ ? std::round(turn) : 0.0f);
+        // Rainbow (its own colors going round) over the mode's.
+        EnsureBrushes(rainbow_ ? std::round(turn) : 0.0f, rainbow_ ? Shown::Auto : shown_);
         target_->SetTransform(face);
         target_->FillGeometry(body_.Get(), bodyBrush_.Get());
         target_->FillGeometry(body_.Get(), sheenBrush_.Get());
@@ -702,27 +850,179 @@ private:
             modeGeneration_ = runtime_->ModeGeneration();
             Cheer();
         }
+        UpdateShown();
+        CheckCapsLock();
     }
 
+    // Caps Lock turned on: said beside it, where letters come out in
+    // capitals (not in Japanese mode typing kana whatever Caps Lock is).
+    void CheckCapsLock() {
+        const bool on = (GetKeyState(VK_CAPITAL) & 1) != 0;
+        if (on == capsLock_) return;
+        const bool first = !capsKnown_;
+        capsLock_ = on;
+        capsKnown_ = true;
+        if (!on) {
+            bubble_.Hide();
+            return;
+        }
+        if (first || (shown_ == Shown::Japanese && settings_.japaneseIgnoreCapsLock)) return;
+        const bool japanese = tekito::userdata::UseJapaneseUi(settings_.uiLanguage);
+        Say(japanese ? L"Caps Lock がオンです" : L"Caps Lock is on",
+            japanese ? L"英字が大文字で入力されます" : L"Letters are typed in capitals");
+    }
+
+    // A word handed to it: what it reads and means, for a while.
+    void LookUpAndSay(const std::wstring& text) {
+        const bool japanese = tekito::userdata::UseJapaneseUi(settings_.uiLanguage);
+        const auto found = tekito::companion::LookUp(text, japanese);
+        if (found.title.empty()) {
+            Say(japanese ? L"言葉が見つかりませんでした" : L"No word was found", L"", 3.0);
+            return;
+        }
+        Cheer();
+        Say(found.title, found.body, 10.0);
+    }
+
+    // A note beside it for a few seconds.
+    void Say(const std::wstring& title, const std::wstring& body, double seconds = 4.0) {
+        if (hidden_) return;
+        RECT anchor{};
+        GetWindowRect(hwnd_, &anchor);
+        bubble_.Show(title, body, anchor, GetDpiForWindow(hwnd_), seconds);
+    }
+
+    // The mode of the keyboard the app in front types with: TEKITO's
+    // Japanese keyboard's, its English keyboard's, or none (another
+    // language's keyboard). Windows tells the language only: on the
+    // Japanese keyboard it is taken to be TEKITO.
+    void UpdateShown() {
+        const HWND front = GetForegroundWindow();
+        if (front == hwnd_) return;
+        const DWORD thread = front ? GetWindowThreadProcessId(front, nullptr) : 0;
+        const auto language = PRIMARYLANGID(LOWORD(reinterpret_cast<ULONG_PTR>(GetKeyboardLayout(thread))));
+        profile_ = language == LANG_JAPANESE ? Profile::Japanese
+                   : language == LANG_ENGLISH ? Profile::English
+                                              : Profile::None;
+        if (profile_ == Profile::None) {
+            shown_ = Shown::Off;
+            return;
+        }
+        const auto mode = profile_ == Profile::Japanese
+                              ? tekito::userdata::AvailableMode(settings_, true, runtime_->JapaneseMode())
+                              : runtime_->Mode();
+        shown_ = mode == tekito::InputMode::Japanese ? Shown::Japanese
+                 : mode == tekito::InputMode::Mixed  ? Shown::Mixed
+                 : mode == tekito::InputMode::Direct ? Shown::Off
+                                                     : Shown::Auto;
+        if (forcedLook_ >= 0) shown_ = static_cast<Shown>(forcedLook_);
+    }
+
+    // A click: the next mode, as the switch key goes, kept as Settings keeps
+    // it (the mode TEKITO starts in next time).
+    void SwitchMode() {
+        if (profile_ == Profile::None) return;
+        const bool japanese = profile_ == Profile::Japanese;
+        const auto current = japanese ? tekito::userdata::AvailableMode(settings_, true, runtime_->JapaneseMode())
+                                      : runtime_->Mode();
+        SetModeTo(tekito::userdata::NextSwitchMode(settings_, japanese, current));
+    }
+
+    // `next` as the mode of the keyboard it shows, kept as Settings keeps it
+    // (the mode TEKITO starts in next time).
+    void SetModeTo(tekito::InputMode next) {
+        if (profile_ == Profile::None) return;
+        const bool japanese = profile_ == Profile::Japanese;
+        tekito::userdata::UserSettings saved;
+        if (!repository_->LoadSettings(saved)) saved = settings_;
+        if (japanese) {
+            runtime_->SetJapaneseMode(next);
+            saved.lastJapaneseProfileMode = next;
+            if (!tekito::TypesJapanese(next)) saved.japaneseProfileEnglishMode = next;
+        } else {
+            runtime_->SetMode(next);
+            saved.lastInputMode = next;
+        }
+        if (repository_->SaveSettings(saved)) {
+            settings_ = saved;
+            runtime_->NotifySettingsChanged();
+        }
+        UpdateShown();
+    }
+
+    // Settings, opened at `page` when there is one (TEKITO.exe --page).
+    static void OpenSettings(const wchar_t* page = nullptr) {
+        std::wstring command = L"\"" + AppPath() + L"\"";
+        if (page) command += std::wstring(L" --page ") + page;
+        STARTUPINFOW startup{sizeof(startup)};
+        PROCESS_INFORMATION process{};
+        if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process)) {
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+        }
+    }
+
+    // Right-click: the modes of the keyboard it shows, secret mode, adding a
+    // word, reporting a wrong conversion, Settings, and hiding it.
     void ShowMenu() {
         const bool japanese = tekito::userdata::UseJapaneseUi(settings_.uiLanguage);
         HMENU menu = CreatePopupMenu();
+        if (profile_ != Profile::None) {
+            using tekito::InputMode;
+            const bool japaneseKeyboard = profile_ == Profile::Japanese;
+            const auto current = japaneseKeyboard
+                                     ? tekito::userdata::AvailableMode(settings_, true, runtime_->JapaneseMode())
+                                     : runtime_->Mode();
+            const std::pair<InputMode, const wchar_t*> modes[] = {
+                {InputMode::Japanese, japanese ? L"日本語" : L"Japanese"},
+                {InputMode::Mixed, japanese ? L"まぜ打ち" : L"Mix"},
+                {InputMode::Convert, L"Auto"},
+                {InputMode::Direct, L"Direct"},
+            };
+            for (const auto& [mode, name] : modes) {
+                // Japanese and Mix only where they are modes.
+                if (tekito::TypesJapanese(mode) &&
+                    (!japaneseKeyboard || tekito::userdata::AvailableMode(settings_, true, mode) != mode)) {
+                    continue;
+                }
+                AppendMenuW(menu, MF_STRING | (mode == current ? MF_CHECKED : 0), kMenuMode + static_cast<UINT>(mode), name);
+            }
+            AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        }
+        AppendMenuW(menu, MF_STRING | (runtime_->Secret() ? MF_CHECKED : 0), kMenuSecret,
+                    japanese ? L"シークレットモード" : L"Secret mode");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, kMenuLookUp, japanese ? L"コピーした言葉を調べる" : L"Look up the copied word");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, kMenuWords, japanese ? L"単語を登録する" : L"Add a word");
+        AppendMenuW(menu, MF_STRING, kMenuReport, japanese ? L"誤変換を報告する" : L"Report a wrong conversion");
         AppendMenuW(menu, MF_STRING, kMenuSettings, japanese ? L"設定を開く" : L"Open Settings");
-        AppendMenuW(menu, MF_STRING, kMenuHide, japanese ? L"コンパニオンを非表示にする" : L"Hide the companion");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, kMenuHide, japanese ? L"ルビを非表示にする" : L"Hide Rubi");
         POINT at;
         GetCursorPos(&at);
         SetForegroundWindow(hwnd_);
         const UINT chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, at.x, at.y, 0, hwnd_, nullptr);
         PostMessageW(hwnd_, WM_NULL, 0, 0);
         DestroyMenu(menu);
-        if (chosen == kMenuSettings) {
-            std::wstring command = L"\"" + AppPath() + L"\"";
-            STARTUPINFOW startup{sizeof(startup)};
-            PROCESS_INFORMATION process{};
-            if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process)) {
-                CloseHandle(process.hThread);
-                CloseHandle(process.hProcess);
+        if (chosen >= kMenuMode && chosen < kMenuMode + 8) {
+            SetModeTo(static_cast<tekito::InputMode>(chosen - kMenuMode));
+        } else if (chosen == kMenuSecret) {
+            // As the language bar's menu does: for this session only.
+            runtime_->SetSecret(!runtime_->Secret());
+        } else if (chosen == kMenuLookUp) {
+            const auto text = ClipboardText(hwnd_);
+            if (text && !text->empty()) {
+                LookUpAndSay(*text);
+            } else {
+                Say(japanese ? L"コピーした言葉はありません" : L"Nothing is copied", L"", 3.0);
             }
+        } else if (chosen == kMenuWords) {
+            OpenSettings(L"dictionary");
+        } else if (chosen == kMenuReport) {
+            OpenSettings(L"about");
+        } else if (chosen == kMenuSettings) {
+            OpenSettings();
         } else if (chosen == kMenuHide) {
             // The setting off, as from Settings.
             tekito::userdata::UserSettings current;
@@ -807,6 +1107,11 @@ private:
     ComPtr<ID2D1SolidColorBrush> zBrush_;
     D2D1_RECT_F bodyBox_{};
     float brushHue_{-1.0f};
+    Shown brushLook_{Shown::Auto};
+    // Whose mode it shows (UpdateShown), and which.
+    enum class Profile { Japanese, English, None };
+    Profile profile_{Profile::None};
+    Shown shown_{Shown::Auto};
 
     HDC memory_{nullptr};
     HBITMAP bitmap_{nullptr};
@@ -832,6 +1137,7 @@ private:
     std::mt19937 random_{static_cast<std::uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count())};
     DWORD idleMs_{0};
     int forcedIdleMs_{-1};
+    int forcedLook_{-1};
     bool noSecret_{false};
     bool drowsy_{false};
     float swing_{0.0f};
@@ -847,6 +1153,11 @@ private:
     bool dragging_{false};
     POINT pressedAt_{};
     POINT pressedPlace_{};
+    tekito::companion::Bubble bubble_;
+    TextDrop* drop_{nullptr};
+    bool dropHover_{false};
+    bool capsLock_{false};
+    bool capsKnown_{false};
 };
 
 }  // namespace
@@ -865,12 +1176,15 @@ std::optional<int> RunCompanionFromCommandLine() {
         return 0;
     }
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    // Words dropped on it come by OLE drag and drop.
+    const bool ole = SUCCEEDED(OleInitialize(nullptr));
     int result = 0;
     {
         Companion companionWindow;
         // Not created when the setting is off (left in Windows' startup list).
         if (companionWindow.Create(GetModuleHandleW(nullptr))) result = companionWindow.Run();
     }
+    if (ole) OleUninitialize();
     ReleaseMutex(single);
     CloseHandle(single);
     return result;

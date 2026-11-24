@@ -35,7 +35,12 @@ std::optional<TopicVectors::Vector> TopicVectors::Of(std::wstring_view word) con
     if (!IsOpen() || word.empty()) return std::nullopt;
     std::optional<std::uint32_t> row;
     words_.ForEachRow(ToUtf8(word), [&](const std::vector<std::string_view>& fields) {
-        if (fields.size() > 1) row = static_cast<std::uint32_t>(std::strtoul(std::string(fields[1]).c_str(), nullptr, 10));
+        if (fields.size() > 1) {
+            const std::string text(fields[1]);
+            char* end = nullptr;
+            const unsigned long long value = std::strtoull(text.c_str(), &end, 10);
+            if (end != text.c_str() && value < count_) row = static_cast<std::uint32_t>(value);
+        }
         return false;
     });
     if (!row || *row >= count_) return std::nullopt;

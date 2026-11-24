@@ -41,6 +41,14 @@ struct PhraseCandidate {
     bool spellingCorrection{false};
     // Read from the keys with a slip undone (offered in the list, "moshikashite").
     bool slip{false};
+    // Mix: an English word spelled otherwise than its keys (recieve: receive),
+    // and the keys as typed beside it ("moshikashite" and "as typed").
+    bool englishCorrection{false};
+    bool asTyped{false};
+    // Mix: slang offered for an English word (English Auto's), and the
+    // empty one that takes out a word typed twice in an English sentence.
+    bool slang{false};
+    bool repeat{false};
     // Set when the candidate is the whole input read again (a slip across
     // phrases): choosing it makes this the reading, as one phrase.
     std::wstring reading;
@@ -68,6 +76,11 @@ struct PhraseCandidate {
     // the sentences the sentence check read (JapaneseComposer's chunk
     // candidates); `length` is how far it reaches.
     bool chunk{false};
+    // A date or time a date word is written as (2026/11/23), or a symbol or
+    // emoji the reading names: the first page of a list has one of each.
+    // Typed: what was typed in another form, at the end of the list.
+    enum class Group : std::uint8_t { Word, Date, Symbol, Typed };
+    Group group{Group::Word};
     // What the sentence's other words say for it, as the topic order read
     // them (PhraseSignal); 0 when not read.
     std::array<float, 5> signals{};

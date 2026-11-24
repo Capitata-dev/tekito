@@ -83,6 +83,7 @@ struct KeyCommand {
         Reconvert,          // Henkan with nothing typed: the selected text, converted again
         ShowCandidates,     // Tab while typing: converted, with the candidate list open
         CommitToFocus,      // Shift+Enter: the phrases up to the focused one
+        Nothing,            // a key the list takes with nothing to do (a digit in its columns)
     };
     Action action{Action::Commit};
     wchar_t character{0};
@@ -97,7 +98,8 @@ struct KeyCommand {
 struct KeyOptions {
     // Space outside a composition types a full-width space (Shift the other).
     bool fullWidthSpace{true};
-    // Rows of the candidate list a page shows (1-9 choose from it).
+    // Rows of the candidate list's first page (1-9 choose from it); the
+    // pages after it are kListColumns columns of as many rows.
     std::size_t pageSize{9};
     // Shift+Enter commits up to the focused phrase (CommitToFocus).
     bool shiftEnterToFocus{false};
@@ -132,11 +134,26 @@ struct CandidateList {
         std::wstring reading;
         // The number shown beside it (1-9 on each page).
         std::uint32_t number{0};
-        // Read with a slip undone, or a spelling Mozc corrects.
+        // Read with a slip undone, or a spelling Mozc corrects (Mix: an
+        // English word spelled otherwise than typed).
         bool suggestion{false};
         // The first of the phrase's own candidates after its chunk
         // candidates (PhraseCandidate::chunk): a line above it.
         bool groupStart{false};
+        // Mix: the English keys as typed, beside a word spelled otherwise.
+        bool asTyped{false};
+        // Mix: slang offered for an English word; the empty row that takes
+        // out a word typed twice.
+        bool slang{false};
+        bool repeat{false};
+        // A kanji written another way: its old form (旧字体), another
+        // variant (異体字).
+        bool oldForm{false};
+        bool variantForm{false};
+        // The same as another row but for its width: the wider or the
+        // narrower of the two (None: no such row).
+        enum class Width : std::uint8_t { None, Full, Half };
+        Width width{Width::None};
     };
     Kind kind{Kind::None};
     std::vector<Row> rows;
@@ -144,7 +161,34 @@ struct CandidateList {
     // The page shown: `count` rows from `pageStart`.
     std::size_t pageStart{0};
     std::size_t count{0};
+    // The pages after the first: columns of this many rows, down then
+    // across (0 on the first page, a single column).
+    std::size_t columnRows{0};
+    // The page shown (from 0) and how many there are (0: not paged).
+    std::size_t page{0};
+    std::size_t pages{0};
 };
+
+// The list's pages: the first, `pageSize` in one column; then pages of
+// kListColumns columns of `pageSize`, down each column then across.
+inline constexpr std::size_t kListColumns = 3;
+struct ListPage {
+    std::size_t start{0};
+    std::size_t count{0};
+    bool columns{false};
+    // Which page (from 0) of how many.
+    std::size_t index{0};
+    std::size_t pages{1};
+};
+[[nodiscard]] ListPage ListPageOf(std::size_t index, std::size_t size, std::size_t pageSize) noexcept;
+
+// Marks the rows the same as another but for width (Row::width).
+void MarkWidths(std::vector<CandidateList::Row>& rows);
+// Marks the rows that write a kanji another way than a row in the list
+// (國 beside 国, 渡邊 beside 渡辺): its old form (旧字体) or another
+// variant (異体字). A word whose kanji has no plainer form listed beside it
+// (叛乱) is not marked.
+void MarkVariantForms(std::vector<CandidateList::Row>& rows, const KanjiSets* sets);
 
 [[nodiscard]] CandidateList CandidateListFor(const JapaneseComposer& composer, std::size_t pageSize);
 

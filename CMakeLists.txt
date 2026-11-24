@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(TEKITO VERSION 1.1.1 LANGUAGES C CXX)
+project(TEKITO VERSION 1.1.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -44,6 +44,14 @@ add_library(tekito_core STATIC
     src/Core/ExternalSlangProvider.cpp
     src/Core/InputStateMachine.cpp
     src/Core/Japanese/JapaneseComposer.cpp
+    src/Core/Japanese/ComposerTyping.cpp
+    src/Core/Japanese/ComposerLive.cpp
+    src/Core/Japanese/ComposerPredictions.cpp
+    src/Core/Japanese/ComposerConversion.cpp
+    src/Core/Japanese/ComposerCandidates.cpp
+    src/Core/Japanese/ComposerSlips.cpp
+    src/Core/Japanese/ComposerSentenceCheck.cpp
+    src/Core/Japanese/ComposerMix.cpp
     src/Core/Japanese/JapaneseConverter.cpp
     src/Core/Japanese/JapaneseData.cpp
     src/Core/Japanese/JapaneseDictionary.cpp
@@ -144,6 +152,10 @@ add_library(Tekito.Tsf SHARED
     src/Tsf/Registration.cpp
     src/Tsf/TekitoGuids.cpp
     src/Tsf/TextService.cpp
+    src/Tsf/TextServiceKeys.cpp
+    src/Tsf/TextServiceEnglish.cpp
+    src/Tsf/TextServiceComposition.cpp
+    src/Tsf/TextServiceCandidates.cpp
     src/Tsf/Tekito.Tsf.def
     assets/tekito_tsf.rc
 )
@@ -171,7 +183,15 @@ target_link_options(Tekito.Tsf PRIVATE /DELAYLOAD:d3d11.dll /DELAYLOAD:CoreMessa
 add_executable(TEKITO WIN32
     apps/tekito/main.cpp
     apps/tekito-settings/main.cpp
+    apps/tekito-settings/SettingsApp.cpp
+    apps/tekito-settings/SettingsState.cpp
+    apps/tekito-settings/SettingsRequests.cpp
+    apps/tekito-settings/SettingsWords.cpp
+    apps/tekito-settings/SettingsDownloads.cpp
+    apps/tekito-settings/SettingsFiles.cpp
     apps/tekito-settings/Companion.cpp
+    apps/tekito-settings/CompanionBubble.cpp
+    apps/tekito-settings/CompanionLookup.cpp
     assets/tekito_app.rc
 )
 target_include_directories(TEKITO PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} src third_party/webview2/include)
@@ -180,11 +200,13 @@ target_compile_options(TEKITO PRIVATE /utf-8)
 target_compile_definitions(TEKITO PRIVATE TEKITO_VERSION_STRING="${PROJECT_VERSION}")
 target_link_libraries(TEKITO PRIVATE
     tekito_userdata tekito_dictionary
-    user32 gdi32 comctl32 comdlg32 shell32 advapi32 urlmon dxgi d2d1
+    user32 gdi32 comctl32 comdlg32 shell32 advapi32 urlmon dxgi d2d1 dwrite ole32
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/lib/x64/WebView2LoaderStatic.lib"
 )
-# The page itself is built by `npm run build` in apps/tekito-settings/ui.
+# The page itself is built by `npm run build` in apps/tekito-settings/ui;
+# the copy beside TEKITO.exe is made afresh, with no file left from before.
 add_custom_command(TARGET TEKITO POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:TEKITO>/settings-ui"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/apps/tekito-settings/ui/dist"
         "$<TARGET_FILE_DIR:TEKITO>/settings-ui"
@@ -222,17 +244,20 @@ if(TEKITO_BUILD_AI)
     )
 
     # The processor's runtime pack: TekitoAI.exe with ONNX Runtime's own
-    # release (MIT, the same version as Windows ML's), in ai-runtime-cpu/.
-    set(TEKITO_ORT_VERSION "1.28.3")
+    # release (MIT, 1.28.3, the same version as Windows ML's), in
+    # ai-runtime-cpu/. ONNX Runtime's GitHub releases are gone (November
+    # 2026) and NuGet has no 1.28.3, so its DLL, LICENSE and
+    # ThirdPartyNotices.txt come from TEKITO's published runtime pack, which
+    # carries them unchanged (the DLL's SHA-256 is 4D2774A5...A6E2 in both).
     FetchContent_Declare(ort_cpu
-        URL https://github.com/microsoft/onnxruntime/releases/download/v${TEKITO_ORT_VERSION}/onnxruntime-win-x64-${TEKITO_ORT_VERSION}.zip
-        URL_HASH SHA256=1d6fab48e85f948436af7c8c971d2c145cf224e2c444755dec894f8b0de11a83
+        URL https://github.com/Capitata-dev/tekito/releases/download/ai-models-3/TEKITO-ai-runtime.zip
+        URL_HASH SHA256=af216815e7b721890841a558d0f4f157dc67c6887f29817d72342482dc8ed6c5
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     )
     FetchContent_MakeAvailable(ort_cpu)
     add_custom_command(TARGET TekitoAI POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:TekitoAI>/ai-runtime-cpu"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:TekitoAI>" "${ort_cpu_SOURCE_DIR}/lib/onnxruntime.dll"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:TekitoAI>" "${ort_cpu_SOURCE_DIR}/onnxruntime.dll"
                 "${ort_cpu_SOURCE_DIR}/LICENSE" "${ort_cpu_SOURCE_DIR}/ThirdPartyNotices.txt"
                 "$<TARGET_FILE_DIR:TekitoAI>/ai-runtime-cpu"
     )
@@ -242,7 +267,7 @@ endif()
 # Setup program. The package-release script appends the package to it.
 
 set(TEKITO_SETUP_LIBS
-    delayimp user32 ole32 oleaut32 shell32 shlwapi advapi32 bcrypt userenv gdi32 d2d1 dwrite dwmapi windowscodecs mfplay
+    delayimp user32 ole32 oleaut32 shell32 shlwapi advapi32 bcrypt userenv gdi32 d2d1 dwrite dwmapi windowscodecs
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2/lib/x64/WebView2LoaderStatic.lib"
 )
 
@@ -253,7 +278,7 @@ target_compile_options(TekitoSetupStub PRIVATE /utf-8)
 target_link_libraries(TekitoSetupStub PRIVATE ${TEKITO_SETUP_LIBS})
 # DLLs beside setup (Downloads) are never loaded: System32 only, and the
 # ones not always loaded by Windows wait until setup has said so.
-set_target_properties(TekitoSetupStub PROPERTIES LINK_FLAGS "/MANIFEST:NO /DEPENDENTLOADFLAG:0x800 /DELAYLOAD:d2d1.dll /DELAYLOAD:dwrite.dll /DELAYLOAD:dwmapi.dll /DELAYLOAD:mfplay.dll /DELAYLOAD:bcrypt.dll /DELAYLOAD:userenv.dll /DELAYLOAD:shlwapi.dll")
+set_target_properties(TekitoSetupStub PROPERTIES LINK_FLAGS "/MANIFEST:NO /DEPENDENTLOADFLAG:0x800 /DELAYLOAD:d2d1.dll /DELAYLOAD:dwrite.dll /DELAYLOAD:dwmapi.dll /DELAYLOAD:bcrypt.dll /DELAYLOAD:userenv.dll /DELAYLOAD:shlwapi.dll")
 
 # ---------------------------------------------------------------------------
 # Tests and tools
@@ -347,7 +372,7 @@ if(TEKITO_BUILD_TESTS)
     target_link_libraries(tekito_setup_preview PRIVATE ${TEKITO_SETUP_LIBS})
     # DLLs beside setup (Downloads) are never loaded: System32 only, and the
     # ones not always loaded by Windows wait until setup has said so.
-    set_target_properties(tekito_setup_preview PROPERTIES LINK_FLAGS "/MANIFEST:NO /DEPENDENTLOADFLAG:0x800 /DELAYLOAD:d2d1.dll /DELAYLOAD:dwrite.dll /DELAYLOAD:dwmapi.dll /DELAYLOAD:mfplay.dll /DELAYLOAD:bcrypt.dll /DELAYLOAD:userenv.dll /DELAYLOAD:shlwapi.dll")
+    set_target_properties(tekito_setup_preview PROPERTIES LINK_FLAGS "/MANIFEST:NO /DEPENDENTLOADFLAG:0x800 /DELAYLOAD:d2d1.dll /DELAYLOAD:dwrite.dll /DELAYLOAD:dwmapi.dll /DELAYLOAD:bcrypt.dll /DELAYLOAD:userenv.dll /DELAYLOAD:shlwapi.dll")
 endif()
 
 if(TEKITO_BUILD_BENCHMARKS)

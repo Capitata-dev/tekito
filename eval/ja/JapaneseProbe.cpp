@@ -15,6 +15,7 @@
 #include "Core/Japanese/JapaneseComposer.h"
 #include "Core/Japanese/JapaneseData.h"
 #include "Core/Japanese/JapaneseKeys.h"
+#include "Core/Japanese/JapaneseLearning.h"
 #include "Core/Japanese/KanaText.h"
 #include "Core/Japanese/LanguageModel.h"
 #include "Core/Japanese/SentenceReranker.h"
@@ -29,11 +30,13 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -119,7 +122,9 @@ int main(int argc, char** argv) {
                 continue;
             }
             std::cout << line << "\t" << Narrow(meaning->headword) << "\t" << Narrow(meaning->base) << "\t"
-                      << Narrow(meaning->form) << "\t" << Narrow(meaning->senses.front()) << "\n";
+                      << Narrow(meaning->form);
+            for (const auto& sense : meaning->senses) std::cout << "\t" << Narrow(sense);
+            std::cout << "\n";
         }
         return 0;
     }
@@ -219,6 +224,7 @@ int main(int argc, char** argv) {
             if (name == "japaneseLiveConversion") { settings.japaneseLiveConversion = value != 0; found = true; }
             if (name == "japaneseSentenceCheck") { settings.japaneseSentenceCheck = value != 0; found = true; }
             if (name == "japaneseSlipAutoApply") { settings.japaneseSlipAutoApply = value != 0; found = true; }
+            if (name == "japaneseCasedWords") { settings.japaneseCasedWords = value != 0; found = true; }
             if (name == "japaneseFirstPageSymbol") { settings.japaneseFirstPageSymbol = value != 0; found = true; }
             if (name == "japaneseTypedForms") { settings.japaneseTypedForms = value != 0; found = true; }
             if (name == "japaneseChunkCandidates") { settings.japaneseChunkCandidates = value != 0; found = true; }
@@ -296,11 +302,20 @@ int main(int argc, char** argv) {
     // handling (TranslateKey, ApplyKey) into a document, printed after each
     // key as the document then [the composition]. A capital is Shift and
     // the letter; {space} {enter} {s-enter} {bs} {esc} {left} {right} {f6}..{f10} are
-    // those keys (a plain space too).
+    // those keys (a plain space too); {pause} is typing stopping a moment (live
+// conversion converts again). "learned" prints, after each line, what
+// learning took from it (reading = text).
     if (std::find_if(argv + 3, argv + argc, [](const char* a) { return std::string(a) == "keys"; }) != argv + argc) {
         using Key = tekito::japanese::KeyPress::Key;
         const auto options = tekito::userdata::JapaneseKeyOptions(settings, mix);
         const bool showPhrases = std::find_if(argv + 3, argv + argc, [](const char* a) { return std::string(a) == "phrases"; }) != argv + argc;
+        const bool showLearned = std::find_if(argv + 3, argv + argc, [](const char* a) { return std::string(a) == "learned"; }) != argv + argc;
+        const bool showList = std::find_if(argv + 3, argv + argc, [](const char* a) { return std::string(a) == "list"; }) != argv + argc;
+        // "timing": how long each key took (its handling and what is shown
+        // after it), in milliseconds, after the line.
+        const bool timing = std::find_if(argv + 3, argv + argc, [](const char* a) { return std::string(a) == "timing"; }) != argv + argc;
+        tekito::japanese::JapaneseLearningStore learning;
+        if (showLearned) composer.SetLearning(&learning);
         std::ifstream lines(argv[1], std::ios::binary);
         for (std::string line; std::getline(lines, line);) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -310,7 +325,9 @@ int main(int argc, char** argv) {
             std::wstring document;
             std::cout << line << "\n ";
             const std::wstring keys = Widen(line);
+            std::vector<double> took;
             for (std::size_t i = 0; i < keys.size(); ++i) {
+                const auto started = std::chrono::steady_clock::now();
                 tekito::japanese::KeyPress press;
                 std::wstring name(1, keys[i]);
                 if (keys[i] == L'{') {
@@ -320,9 +337,23 @@ int main(int argc, char** argv) {
                     const std::pair<std::wstring_view, Key> named[] = {
                         {L"{space}", Key::Space}, {L"{enter}", Key::Enter}, {L"{bs}", Key::Backspace}, {L"{esc}", Key::Escape},
                         {L"{left}", Key::Left}, {L"{right}", Key::Right}, {L"{f6}", Key::F6}, {L"{f7}", Key::F7},
-                        {L"{f8}", Key::F8}, {L"{f9}", Key::F9}, {L"{f10}", Key::F10}};
+                        {L"{f8}", Key::F8}, {L"{f9}", Key::F9}, {L"{f10}", Key::F10},
+                        {L"{up}", Key::Up}, {L"{down}", Key::Down}, {L"{tab}", Key::Tab},
+                        {L"{pgup}", Key::PageUp}, {L"{pgdn}", Key::PageDown}, {L"{home}", Key::Home},
+                        {L"{end}", Key::End}};
+                    // {s-...}: the same key with Shift.
+                    const std::wstring plain = name.starts_with(L"{s-") ? L"{" + name.substr(3) : name;
                     for (const auto& [text, key] : named) {
-                        if (name == text) press.key = key;
+                        if (plain == text) press.key = key;
+                    }
+                    if (plain != name && name != L"{s-enter}") press.shift = true;
+                    if (name == L"{pause}") {
+                        (void)composer.RefineLive();
+                        std::wstring shown;
+                        for (const auto& segment : composer.Segments()) shown += segment.text;
+                        took.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+                        std::cout << " {pause}:" << Narrow(document) << "[" << Narrow(shown) << "]";
+                        continue;
                     }
                     if (name == L"{s-enter}") {
                         press.key = Key::Enter;
@@ -358,9 +389,38 @@ int main(int argc, char** argv) {
                 // The composition, its phrases apart with "|" when "phrases" is given.
                 std::wstring shown;
                 for (const auto& segment : composer.Segments()) shown += (showPhrases && !shown.empty() ? L"|" : L"") + segment.text;
-                std::cout << " " << Narrow(name) << ":" << Narrow(document) << "[" << Narrow(shown) << "]";
+                took.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+                // "[]" with nothing in it but still composing: an empty
+                // composition the text service would keep open.
+                std::cout << " " << Narrow(name) << ":" << Narrow(document) << "[" << Narrow(shown) << "]"
+                          << (shown.empty() && composer.IsComposing() ? "(open)" : "");
+                // "list": with the candidate list open, the selected row and
+                // its page (columns from page 2).
+                if (showList && composer.IsCandidateListOpen()) {
+                    const auto list = tekito::japanese::CandidateListFor(composer, options.pageSize);
+                    if (!list.rows.empty() && list.selected) {
+                        const std::size_t selected = *list.selected;
+                        std::cout << "<" << selected << " p" << list.page + 1 << "/" << list.pages
+                                  << (list.columnRows ? " col" + std::to_string((selected - list.pageStart) / list.columnRows + 1) : std::string{})
+                                  << ">";
+                    }
+                }
             }
             std::cout << "\n";
+            if (timing && !took.empty()) {
+                double total = 0;
+                for (const double ms : took) total += ms;
+                std::cout << "  timing: total " << std::fixed << std::setprecision(1) << total << " ms, slowest "
+                          << *std::max_element(took.begin(), took.end()) << " ms, keys:";
+                for (const double ms : took) std::cout << " " << ms;
+                std::cout << std::defaultfloat << "\n";
+            }
+            if (showLearned) {
+                for (const auto& entry : learning.Entries()) {
+                    std::cout << "  learned: " << Narrow(entry.reading) << " = " << Narrow(entry.surface) << "\n";
+                }
+                learning.Clear();
+            }
         }
         return 0;
     }
@@ -413,8 +473,29 @@ int main(int argc, char** argv) {
         // As the list opens (with the chunk candidates, marked ^).
         if (sentences) composer.ShowCandidates();
         if (const auto* list = composer.FocusedCandidates()) {
+            // With the tags the list shows: [?] a maybe, [=] as typed,
+            // [S] slang, [R] taking out a word typed twice, [O] and [V] an
+            // old form and another variant of a kanji, [F] and [H] full-
+            // and half-width.
+            std::vector<tekito::japanese::CandidateList::Row> tagged;
+            for (const auto& candidate : *list) {
+                tekito::japanese::CandidateList::Row row;
+                row.text = candidate.text;
+                row.suggestion = candidate.slip || candidate.spellingCorrection || candidate.englishCorrection;
+                row.asTyped = candidate.asTyped;
+                row.slang = candidate.slang;
+                row.repeat = candidate.repeat;
+                tagged.push_back(std::move(row));
+            }
+            tekito::japanese::MarkWidths(tagged);
+            tekito::japanese::MarkVariantForms(tagged, composer.KanjiSetsInUse());
+            using Width = tekito::japanese::CandidateList::Row::Width;
             for (std::size_t i = 0; i < list->size() && i < rows; ++i) {
-                std::cout << (i ? " | " : "") << ((*list)[i].chunk ? "^" : "") << Narrow((*list)[i].text);
+                const auto& row = tagged[i];
+                const char* tag = row.repeat ? "[R]" : row.suggestion ? "[?]" : row.asTyped ? "[=]" : row.slang ? "[S]"
+                                  : row.oldForm ? "[O]" : row.variantForm ? "[V]"
+                                  : row.width == Width::Full ? "[F]" : row.width == Width::Half ? "[H]" : "";
+                std::cout << (i ? " | " : "") << ((*list)[i].chunk ? "^" : "") << Narrow((*list)[i].text) << tag;
             }
             std::cout << "  (" << list->size() << ")";
         }

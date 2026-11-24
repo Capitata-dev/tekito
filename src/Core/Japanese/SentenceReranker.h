@@ -43,8 +43,14 @@ public:
     // ln p of each sentence: its pieces and the end, after the start.
     // `context`: the text just before them, as the model was trained with
     // (its last pieces, then the separator); empty: none.
+    // What LogProbabilities read after one context, kept by its caller for
+    // the next time: the pieces sentences share with those read before
+    // (the start of a sentence typed on) are not read again.
+    class Memory;
+    // `memory` (when given): what was read before after the same context,
+    // added to; the same numbers as without it.
     [[nodiscard]] std::vector<double> LogProbabilities(std::span<const std::wstring> sentences,
-                                                       std::wstring_view context = {}) const;
+                                                       std::wstring_view context = {}, Memory* memory = nullptr) const;
     // Which of `sentences` (likeliest first, as the converter ranks them)
     // to take: 0 keeps the first. Only the first Top() of the first
     // `ranked` are looked at; those after `ranked` (whole texts read with
@@ -54,7 +60,7 @@ public:
     // its prior.
     [[nodiscard]] std::size_t Choose(std::span<const std::wstring> sentences, std::size_t ranked = SIZE_MAX,
                                      double penalty = 0.0, std::wstring_view context = {},
-                                     std::vector<std::pair<double, double>>* read = nullptr) const;
+                                     std::vector<std::pair<double, double>>* read = nullptr, Memory* memory = nullptr) const;
 
     // Reads many texts that start alike, as a search phrase by phrase makes
     // them: what they share is read once.
@@ -93,6 +99,28 @@ private:
     std::size_t longestPiece_{0};
     std::uint32_t bytePiece_[256]{};
     std::uint32_t separator_{3}, end_{2};
+};
+
+class SentenceReranker::Memory final {
+public:
+    void Clear() noexcept {
+        context_.clear();
+        nodes_.clear();
+    }
+
+private:
+    friend class SentenceReranker;
+    struct Node {
+        std::uint32_t piece{0};
+        std::size_t parent{0};
+        std::vector<std::size_t> children;
+        double logProbability{0};
+        // Not read yet: its log probability is to be worked out.
+        bool fresh{true};
+        std::optional<State> state;
+    };
+    std::wstring context_;
+    std::vector<Node> nodes_;
 };
 
 class SentenceReranker::Reader final {

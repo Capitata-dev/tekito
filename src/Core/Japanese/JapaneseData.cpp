@@ -58,7 +58,7 @@ bool KnownLetters(std::wstring_view letters, const WrittenForms& forms, const Wr
     if (const auto seen = loanwords.InJapaneseText(lower); seen && *seen >= kOftenInJapanese) return true;
     for (const WrittenForms* table : {&forms, &names}) {
         if (!table->IsOpen() || (table == &names && letters.size() < kNameLetters)) continue;
-        if (const auto form = table->Find(lower); form && form->written == letters) return true;
+        if (const auto form = table->Find(lower); form && !form->offered && form->written == letters) return true;
     }
     return false;
 }
@@ -137,6 +137,7 @@ const JapaneseData* ProcessJapaneseData() {
         (void)loaded->loanwords.OpenEnglish(ExternalLexiconProvider::PackDirectory(L"japanese-english"));
         (void)loaded->kanjiSets.Load(ExternalLexiconProvider::PackDirectory(L"kanji-sets") / L"kanji.tsv");
         (void)loaded->kanjiSets.LoadVariants(ExternalLexiconProvider::PackDirectory(L"japanese-variants") / L"variants.tsv");
+        (void)loaded->kanjiSets.LoadOldForms(ExternalLexiconProvider::PackDirectory(L"japanese-variants") / L"old-forms.tsv");
         if (loaded->notation.Open(ExternalLexiconProvider::PackDirectory(L"japanese-notation"))) {
             loaded->converter->SetNotation(&loaded->notation);
         }
@@ -241,6 +242,11 @@ std::shared_ptr<const PostalCodes> ProcessPostalCodes() {
     return cached;
 }
 
+const JapaneseConverter* ProcessConverter() {
+    const auto* data = ProcessJapaneseData();
+    return data ? data->converter.get() : nullptr;
+}
+
 const MeaningDictionary& ProcessMeanings() {
     static const std::unique_ptr<MeaningDictionary> meanings = [] {
         auto opened = std::make_unique<MeaningDictionary>();
@@ -284,6 +290,27 @@ void AttachJapaneseData(JapaneseComposer& composer) {
     composer.SetSentenceReranker(data && data->reranker.IsOpen() ? &data->reranker : nullptr);
     composer.SetKanaSlips(data && data->slips.IsOpen() ? &data->slips : nullptr);
     composer.SetKanjiSets(data && (!data->kanjiSets.Empty() || data->kanjiSets.HasVariants()) ? &data->kanjiSets : nullptr);
+    // By its own name (macOS), as a product is (iCloud), or as English
+    // writes it (iPhone, eBay).
+    if (data) {
+        composer.SetLetterContext(data->nounContext);
+        composer.SetLetterNames([data](std::wstring_view lower) {
+            std::vector<std::wstring> names;
+            const auto add = [&](std::wstring name) {
+                if (std::find(names.begin(), names.end(), name) == names.end()) names.push_back(std::move(name));
+            };
+            if (const auto form = data->writtenForms.Find(lower)) add(form->written);
+            if (const auto product = data->productNames.Find(lower)) add(product->written);
+            return names;
+        });
+        composer.SetWrittenAs([data](std::wstring_view lower) -> std::optional<std::wstring> {
+            if (const auto form = data->writtenForms.Find(lower); form && !form->japaneseOnly && !form->offered) {
+                return form->written;
+            }
+            if (const auto product = data->productNames.Find(lower)) return product->written;
+            return data->loanwords.IsOpen() ? data->loanwords.WrittenAs(lower) : std::nullopt;
+        });
+    }
 }
 
 void AttachMixedTyping(JapaneseComposer& composer, bool on) {

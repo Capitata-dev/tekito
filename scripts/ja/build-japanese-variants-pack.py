@@ -14,6 +14,8 @@ must be the common kanji. Both must have a Japanese source in Unihan
 (kIRG_JSource) or be in cp932, so Japanese fonts have them. Variants go
 both ways (沢: 澤, 澤: 沢). A kanji's variants come 旧字体 or 新字体 first,
 then those in cp932 (﨑, which Windows fonts all have), then the rest.
+old-forms.tsv lists each kanji's 旧字体 (kJapaneseOldVariant: 国<TAB>國), so
+the candidate list can tell an old form (旧字体) from another variant (異体字).
 
 Usage:
   python scripts/ja/build-japanese-variants-pack.py --itaiji SKK-JISYO.itaiji --unihan <Unihan folder> \\
@@ -118,7 +120,18 @@ def main() -> None:
             if all(b != known for _, known in listed):
                 listed.append((0 if old_or_new else 1 if in_cp932(b) else 2, b))
 
+    # 旧字体: kanji and its old forms, both in the variants above.
+    old_forms: dict[str, list[str]] = {}
+    for kanji, variant in unihan_pairs(table, ("kJapaneseOldVariant",)):
+        if variant in {b for _, b in variants.get(kanji, [])} and variant not in old_forms.get(kanji, []):
+            old_forms.setdefault(kanji, []).append(variant)
+
     args.out.mkdir(parents=True, exist_ok=True)
+    old_data = args.out / "old-forms.tsv"
+    with old_data.open("w", encoding="utf-8", newline="\n") as out:
+        out.write("# kanji\tits old forms, 旧字体 (scripts/ja/build-japanese-variants-pack.py)\n")
+        for kanji in sorted(old_forms):
+            out.write(f"{kanji}\t{''.join(old_forms[kanji])}\n")
     data = args.out / "variants.tsv"
     with data.open("w", encoding="utf-8", newline="\n") as out:
         out.write("# kanji\tits variant forms (scripts/ja/build-japanese-variants-pack.py)\n")
@@ -136,13 +149,15 @@ def main() -> None:
         "pack_id": "japanese-variants",
         "display_name": "Kanji Variant Forms",
         "schema_version": 1,
-        "version": "2026.10",
+        "version": "2026.11",
         "language": "ja-JP",
         "type": "japanese-variants",
         "format": "tsv",
         "file": "variants.tsv",
+        "files": ["variants.tsv", "old-forms.tsv"],
         "entry_count": len(variants),
-        "sha256": {"file": hashlib.sha256(data.read_bytes()).hexdigest().upper()},
+        "sha256": {"file": hashlib.sha256(data.read_bytes()).hexdigest().upper(),
+                   "old-forms": hashlib.sha256(old_data.read_bytes()).hexdigest().upper()},
         "license": "Unicode-3.0 (Unihan) + public domain (SKK-JISYO.itaiji)",
         "ai_training": True,
         "source": "https://www.unicode.org/Public/UCD/latest/ucd/Unihan.zip (Unihan_Variants.txt, "
@@ -151,7 +166,7 @@ def main() -> None:
     }
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
                                             encoding="utf-8", newline="\n")
-    print(f"japanese-variants: {len(variants)} kanji")
+    print(f"japanese-variants: {len(variants)} kanji, {len(old_forms)} with old forms")
 
 
 if __name__ == "__main__":

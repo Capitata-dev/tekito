@@ -13,6 +13,10 @@ namespace tekito::userdata {
 
 enum class AiModelInstallError { None, Download, Checksum, Unpack, Invalid, InUse };
 
+// Whether `packId` is a pack's name: one folder name of lower-case letters,
+// digits and hyphens, never a path.
+[[nodiscard]] bool IsPlainPackId(std::wstring_view packId) noexcept;
+
 // Unpacks `zip` (whose SHA-256 must be `sha256`, upper-case hex) and puts
 // the pack `packId` in it into `dataRoot`, in place of an older copy.
 [[nodiscard]] AiModelInstallError InstallAiModelPack(const std::filesystem::path& zip, std::string_view sha256,
@@ -31,6 +35,13 @@ enum class AiModelInstallError { None, Download, Checksum, Unpack, Invalid, InUs
 
 // Whether a valid copy of the pack is in `dataRoot`.
 [[nodiscard]] bool AiModelPackInstalled(std::wstring_view packId, const std::filesystem::path& dataRoot);
+// The version its manifest gives ("2026.11"); empty when the pack is not
+// there.
+[[nodiscard]] std::wstring AiPackVersion(std::wstring_view packId, const std::filesystem::path& dataRoot);
+// Whether `installed` is an older version than `wanted`, both dotted
+// numbers (2026.11 < 2026.11.2 < 2026.12); a version that is not one is
+// older than any.
+[[nodiscard]] bool OlderVersion(std::wstring_view installed, std::wstring_view wanted) noexcept;
 // Whether what runs the models (the ai-runtime pack, speaking this
 // build's protocol) is in `dataRoot`.
 [[nodiscard]] bool AiRuntimeInstalled(const std::filesystem::path& dataRoot);

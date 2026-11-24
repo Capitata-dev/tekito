@@ -16,74 +16,16 @@ const japanesePackNames = [
 // "?japanese=0" shows Settings as without Japanese installed.
 const japaneseInstalled = new URLSearchParams(window.location.search).get("japanese") !== "0";
 const detectedJapaneseKeyboard = new URLSearchParams(window.location.search).get("keyboard") !== "us";
-// "?ai=1": the light AI model is there and chosen, so Home asks AI.
+// "?ai=1": the light AI model is there and chosen.
 const aiInstalled = new URLSearchParams(window.location.search).get("ai") === "1";
-
-// A stand-in for AI in Home's conversation: a few requests as words to look
-// for, and the reply, changes and pointers AI would give for them.
-function fakeChat(messages, settings, level) {
-  const answer = fakeReply(messages, settings, level);
-  // Only suggesting, AI says so.
-  if (level === 0 && answer.actions.length) answer.reply = answer.reply.replace(/にしました。/, "にする提案です。「適用」を押すと変更されます。").replace(/に戻しました。/, "に戻す提案です。「適用」を押すと変更されます。");
-  return answer;
-}
-
-function fakeReply(messages, settings, level) {
-  const said = messages.filter((m) => m.role === "user").map((m) => m.text);
-  const last = said[said.length - 1] || "";
-  const current = Object.fromEntries((settings || []).map((s) => [s.key, s.current]));
-  const reply = (text, actions = [], show = []) => ({ reply: text, actions, show });
-  if (/(auto|Auto|オート).*(だけ|は).*(直|修正|オン)/.test(last)) {
-    return reply("Auto の入力ミスの修正をオンに戻しました。まぜ打ちはオフのままです。", [{ key: "correctionEnabled", value: true }]);
-  }
-  if (/英語|英単語|english/i.test(last) && /直|修正|correct|fix/i.test(last)) {
-    return reply("英単語の入力ミスの修正をオフにしました。特定の単語だけ直されたくない場合は、英語の単語に登録すると、その語だけ修正されなくなります。",
-      [{ key: "mixCorrection", value: false }, { key: "correctionEnabled", value: false }], [{ type: "page", id: "englishWords" }]);
-  }
-  if (/候補/.test(last) && /増|多|ふや/.test(last)) {
-    const big = /めっちゃ|もっと|最大|すごく|たくさん/.test(last);
-    const rows = big ? 20 : 9;
-    if (rows > 9 && level < 2) {
-      return reply(`1ページの候補数を${rows}件にする提案です。選択肢にない数なので、「適用」を押すと変更されます。数字キーで選べるのは9件目までです。`,
-        [{ key: "candidateRows", value: rows }]);
-    }
-    return reply(rows > 9 ? `1ページの候補数を${rows}件にしました。数字キーで選べるのは9件目までで、10件目からは矢印キーで選びます。`
-      : `1ページの候補数を${rows}件にしました。`, [{ key: "candidateRows", value: rows }]);
-  }
-  if (/候補/.test(last) && /減|少|へら/.test(last)) {
-    return reply("1ページの候補数を5件にしました。", [{ key: "candidateRows", value: 5 }]);
-  }
-  if (/全角|半角/.test(last)) {
-    const full = /全角に|全角で/.test(last);
-    if (/英字|アルファベット/.test(last)) {
-      return reply(`英字を${full ? "全角" : "半角"}にしました。`, [{ key: "japaneseLetterWidth", value: full ? 0 : 1 }]);
-    }
-    return reply("全角と半角は、英字・記号・スペースで別々に選べます。どれを変えますか？", [], [{ type: "setting", id: "widths" }]);
-  }
-  if (/カタカナ/.test(last)) return reply("変換中に F7 を押すとカタカナになります。", [], [{ type: "keys", id: "japanese.kana" }]);
-  if (/漢字/.test(last) && /減|子ども|子供|少|簡単/.test(last)) {
-    return reply("変換に使う漢字を小学3年生までにしました。", [{ key: "japaneseKanjiRange", value: 3 }, { key: "japaneseKanjiGrade", value: 3 }]);
-  }
-  if (/変な|おかしい|間違/.test(last)) {
-    return reply("よく間違える語は、単語を登録するか、学習した内容から消すと直ります。直らない場合は、誤変換として報告できます。", [],
-      [{ type: "page", id: "japaneseWords" }, { type: "page", id: "learned" }, { type: "page", id: "report" }]);
-  }
-  if (/ライブ/.test(last)) {
-    const off = /やめ|オフ|切/.test(last);
-    return reply(`ライブ変換を${off ? "オフ" : "オン"}にしました。`, [{ key: "japaneseLiveConversion", value: !off }, { key: "mixLiveConversion", value: !off }]);
-  }
-  if (/元に戻|やっぱり/.test(last) && current.candidateRows !== undefined && said.length > 1) {
-    return reply("1ページの候補数を自動に戻しました。", [{ key: "candidateRows", value: 0 }]);
-  }
-  return reply("うまく読み取れませんでした。困っていることや、変えたいことを言い換えてみてください。");
-}
+// ?update=1: the light model there is an older version.
+const aiUpdate = new URLSearchParams(window.location.search).get("update") === "1";
 
 function initialState() {
   return {
     postalCodes: { installed: false },
     encryption: { wanted: false, encrypted: false },
-    aiModels: { light: { installed: aiInstalled, bytes: 358021668 }, strong: { installed: false, bytes: 1587553900 },
-      settings: { installed: aiInstalled && new URLSearchParams(window.location.search).get("settingsai") !== "0", bytes: 357791102 },
+    aiModels: { light: { installed: aiInstalled, bytes: 358021668, update: aiInstalled && aiUpdate, updateBytes: 358021668 }, strong: { installed: false, bytes: 1587553900 },
       runtime: { installed: aiInstalled, bytes: 6000000, windowsMl: false, windowsMlBytes: 20000000, windowsMlDownloading: false },
       downloading: 0, error: "",
       gpus: [{ id: 268566271, name: "AMD Radeon RX 7600" }, { id: -2142881189, name: "Intel(R) Arc(TM) Graphics" }],
@@ -111,7 +53,6 @@ function initialState() {
       socialPersonalization: 1,
       candidateWindowStyle: 0,
       candidateRows: 0,
-      aiSettingsControl: 1,
       mixPunctuation: 0,
       mixDigitWidth: 0,
       mixNumberStyle: 1,
@@ -202,11 +143,12 @@ function initialState() {
       secretMode: false,
       japaneseIgnoreCapsLock: true,
       japaneseNumpadDirect: true,
+      japaneseCasedWords: true,
       uiLanguage: 0,
       excludedApps: ["Code.exe"],
       builtInExcludedApps: ["WindowsTerminal.exe", "OpenConsole.exe", "conhost.exe", "cmd.exe", "powershell.exe", "pwsh.exe"],
     },
-    version: "1.1.1",
+    version: "1.1.2",
     mode: japaneseInstalled ? "japanese" : "auto",
     runtime: { tsf: "Loaded", dataPacks: "12 / 13", japaneseData: japaneseInstalled ? "6 / 6" : "0 / 6", japanese: japaneseInstalled,
       // "?keyboard=us": Windows reports a US keyboard.
@@ -338,7 +280,7 @@ export function installMockHost() {
         state.aiModels = { ...state.aiModels, downloading: message.model };
         window.setTimeout(() => {
           const key = message.model === 1 ? "light" : "strong";
-          state.aiModels = { ...state.aiModels, [key]: { ...state.aiModels[key], installed: true },
+          state.aiModels = { ...state.aiModels, [key]: { ...state.aiModels[key], installed: true, update: false },
             runtime: { ...state.aiModels.runtime, installed: true }, downloading: 0 };
           state.settings.japaneseSentenceModel = message.model;
           const data = JSON.stringify({ type: "state.changed", state });
@@ -403,30 +345,6 @@ export function installMockHost() {
           const data = JSON.stringify({ type: "state.changed", state });
           listeners.forEach((listener) => listener({ data }));
         }, 2500);
-      }
-      if (type === "ai.score") {
-        // A stand-in for Settings' AI model: letters each text shares with
-        // the request, beyond what it shares with no request.
-        const pairs = (text) => new Set([...text].map((ch, i, all) => ch + (all[i + 1] || "")).slice(0, -1));
-        const shared = (a, b) => [...pairs(b)].filter((pair) => pairs(a).has(pair)).length;
-        const scores = String(message.texts).split("\n").map((text) => 2 * (shared(message.prompt, text) - shared(message.base, text)));
-        const data = JSON.stringify({ requestId, ok: true, error: "", state, scores });
-        window.setTimeout(() => listeners.forEach((listener) => listener({ data })), 500);
-        return;
-      }
-      if (type === "settingsAi.download") {
-        state.aiModels = { ...state.aiModels, settings: { ...state.aiModels.settings, downloading: true } };
-        window.setTimeout(() => {
-          state.aiModels = { ...state.aiModels, settings: { ...state.aiModels.settings, installed: true, downloading: false },
-            runtime: { ...state.aiModels.runtime, installed: true } };
-          const data = JSON.stringify({ type: "state.changed", state });
-          listeners.forEach((listener) => listener({ data }));
-        }, 2500);
-      }
-      if (type === "settings.chat") {
-        const data = JSON.stringify({ requestId, ok: true, error: "", state, ...fakeChat(message.messages || [], message.settings, message.level) });
-        window.setTimeout(() => listeners.forEach((listener) => listener({ data })), 900);
-        return;
       }
       if (type === "license.get") {
         const data = JSON.stringify({ requestId, ok: true, error: "", state, text: licenseText });

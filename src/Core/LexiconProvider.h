@@ -19,6 +19,12 @@ struct LexiconQuery {
     Kind kind{Kind::Exact};
     std::wstring_view text;
     std::size_t maxResults{0};
+    // A Prefix query that only looks for words near a slip (not for
+    // completions): a provider whose fuzzy index already answered the
+    // Candidate query may skip it.
+    bool nearSlip{false};
+    // How many edits a Candidate may be from the text (at most 2).
+    std::size_t maxDistance{2};
 };
 
 class ILexiconProvider {

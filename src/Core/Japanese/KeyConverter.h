@@ -88,9 +88,11 @@ public:
     // nothing when it is the keys as typed (the usual conversion handles
     // that) or when keys stay unreadable.
     // `context` and `contextWords`: as for JapaneseConverter::Convert.
+    // `phrases` false: the reading only, its phrases left empty.
     [[nodiscard]] std::optional<KeyConversion> Convert(std::wstring_view keys, std::uint16_t context = 0,
                                                        std::span<const std::wstring> contextWords = {},
-                                                       const JapaneseUserDictionary* user = nullptr) const;
+                                                       const JapaneseUserDictionary* user = nullptr,
+                                                       bool phrases = true) const;
 
 private:
     const JapaneseDictionary& dictionary_;

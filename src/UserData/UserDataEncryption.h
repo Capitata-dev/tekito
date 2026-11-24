@@ -50,6 +50,21 @@ using DataKey = std::array<std::uint8_t, 32>;
 // Before opening: makes the database what user.key asks (encrypted or
 // plain) when no other process has it open. True when it is as asked.
 bool SettleEncryption(const std::filesystem::path& database) noexcept;
+// Held while a process opens the database: SettleEncryption changes it only
+// when no other process has it open, and holds this while it looks and
+// changes, so no process opens it in between. Waits a moment at most;
+// opening goes on without it (as before) when it is not had.
+class DatabaseOpening {
+public:
+    DatabaseOpening();
+    ~DatabaseOpening();
+    DatabaseOpening(const DatabaseOpening&) = delete;
+    DatabaseOpening& operator=(const DatabaseOpening&) = delete;
+
+private:
+    void* lock_{nullptr};  // the lock, in the .cpp
+};
+
 // After opening an encrypted database: gives the connection its key (the
 // one the system keeps for this user). False when it cannot be had.
 [[nodiscard]] bool UnlockDatabase(sqlite3* connection, const std::filesystem::path& database) noexcept;

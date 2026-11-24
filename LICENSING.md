@@ -34,7 +34,7 @@ Where the license allows you to use TEKITO's code, in part or in whole:
   the `NOTICE` file with your program.
 - Credit TEKITO where your program credits the software it uses, such as its
   About screen or its third-party notices, for example: "Includes code from
-  TEKITO by Capitata (https://github.com/Canta360/tekito)".
+  TEKITO by Capitata (https://github.com/Capitata-dev/tekito)".
 
 Naming TEKITO this way is welcome and needs no permission. What needs our
 permission is using the name TEKITO or the TEKITO or Capitata logos as or in

@@ -260,7 +260,10 @@ void ProtectOriginal(std::vector<Candidate>& output, std::unordered_set<std::wst
                                  [](const Candidate& candidate) { return candidate.isOriginal; });
     if (original == output.end()) {
         AddOriginal(output, seen, raw);
-        original = output.end() - 1;
+        original = std::find_if(output.begin(), output.end(),
+                                [&](const Candidate& candidate) { return candidate.isOriginal || candidate.text == raw; });
+        if (original == output.end()) return;
+        original->isOriginal = true;
     }
     original->isProtected = true;
     original->policyFlags |= CandidatePolicyProtect;
@@ -620,25 +623,52 @@ std::vector<Candidate> CandidateGenerator::Generate(std::wstring_view rawText,
     if (exactHasWeakFrequency && !keptAsTyped) {
         // A rare exact lexicon entry may be an obsolete/false-positive spelling.
         // Re-run the general typo search; no word-specific exception is used.
-        output.clear();
+        // What the user's own dictionary gives stays: it is not rare to them.
+        std::erase_if(output, [](const Candidate& candidate) {
+            return (candidate.sourceFlags & CandidateSourceUserDictionary) == 0;
+        });
         seen.clear();
+        for (const auto& candidate : output) seen.insert(candidate.text);
     }
 
+    // Words that start with what was typed: the most common of the first
+    // ones the lexicon gives (in spelling order), nine at most.
     const auto addCompletions = [&]() {
-        lexiconProvider_.Find({LexiconQuery::Kind::Prefix, rawText, 9}, [&](const auto& entry) {
+        constexpr std::size_t kCompletionPool = 128;
+        constexpr std::size_t kCompletions = 9;
+        struct Completion {
+            std::wstring text;
+            std::uint32_t sourceFlags;
+            std::wstring dictionaryEntryId;
+            double frequency;
+        };
+        std::vector<Completion> found;
+        lexiconProvider_.Find({LexiconQuery::Kind::Prefix, rawText, kCompletionPool}, [&](const auto& entry) {
             const auto comparableRaw = entry.caseSensitive ? std::wstring(entry.raw) : Lower(entry.raw);
             const auto comparableInput = entry.caseSensitive ? std::wstring(rawText) : lower;
             if (!entry.spellcheckWord || !comparableRaw.starts_with(comparableInput) ||
                 comparableRaw.size() <= comparableInput.size()) {
                 return;
             }
-            AddUnique(output, seen, MatchCase(rawText, std::wstring(entry.raw)), SemanticLabel::None, false,
-                      80.0, false, CandidatePolicySuggestOnly,
-                      SourceFlagsFor(entry, SemanticLabel::Original) | CandidateSourceCompletion,
-                      DictionaryEntryIdFor(entry, SemanticLabel::Original));
-            if (!HasOriginal(output)) AddOriginal(output, seen, rawText);
-            if (output.size() >= 9) return;
+            found.push_back({MatchCase(rawText, std::wstring(entry.raw)),
+                             SourceFlagsFor(entry, SemanticLabel::Original) | CandidateSourceCompletion,
+                             DictionaryEntryIdFor(entry, SemanticLabel::Original),
+                             frequencyProvider_.Score(entry.raw)});
         });
+        std::stable_sort(found.begin(), found.end(), [](const Completion& left, const Completion& right) {
+            return left.frequency > right.frequency;
+        });
+        std::size_t added = 0;
+        for (auto& completion : found) {
+            if (added >= kCompletions) break;
+            const auto sizeBefore = output.size();
+            AddUnique(output, seen, std::move(completion.text), SemanticLabel::None, false, 80.0, false,
+                      CandidatePolicySuggestOnly, completion.sourceFlags,
+                      std::move(completion.dictionaryEntryId));
+            if (output.size() == sizeBefore) continue;
+            ++added;
+            if (!HasOriginal(output)) AddOriginal(output, seen, rawText);
+        }
     };
 
     if (options.completionEnabled && lower.size() <= 2 && !exact) addCompletions();
@@ -662,9 +692,11 @@ std::vector<Candidate> CandidateGenerator::Generate(std::wstring_view rawText,
                               evidence.qwertyNeighbor,
                               entry,
                               std::wstring(misspelling.correction),
+                              // The words just before, as for every other
+                              // correction (the whole sentence matches no key).
                               {frequencyProvider_.Score(misspelling.correction),
                                options.contextSuggestionsEnabled
-                                   ? phraseProvider_.Score(misspelling.correction, context)
+                                   ? contextScore(misspelling.correction)
                                    : 0.0,
                                learningProvider_.Score(lower, Lower(misspelling.correction)),
                                options.contextSuggestionsEnabled
@@ -675,6 +707,11 @@ std::vector<Candidate> CandidateGenerator::Generate(std::wstring_view rawText,
         });
     }
 
+    // A word of four letters or fewer is a slip of a word one edit away:
+    // two edits from it reach a large share of the lexicon, which only
+    // crowds out the word meant.
+    constexpr std::size_t kShortWord = 4;
+    const std::size_t maxDistance = lower.size() <= kShortWord ? 1u : 2u;
     std::unordered_set<std::wstring> inspected;
     const auto addRankedEntry = [&](const LexiconEntry& entry, bool weakExactRecovery = false) {
         if (!options.correctionEnabled || !entry.spellcheckWord || entry.caseSensitive) return;
@@ -682,7 +719,7 @@ std::vector<Candidate> CandidateGenerator::Generate(std::wstring_view rawText,
         const auto comparableRaw = Lower(entry.raw);
         const auto evidence = typoModel_.Compare(lower, comparableRaw);
         const auto distance = evidence.distance;
-        if (distance > 0 && distance <= 2) {
+        if (distance > 0 && distance <= maxDistance) {
             const auto candidateContextScore = options.contextSuggestionsEnabled
                                                     ? contextScore(entry.raw)
                                                     : 0.0;
@@ -700,16 +737,18 @@ std::vector<Candidate> CandidateGenerator::Generate(std::wstring_view rawText,
     };
     const auto candidateSearchLimit = lower.size() <= 2 ? 4096u : 512u;
     if (exactHasWeakFrequency) {
-        lexiconProvider_.Find({LexiconQuery::Kind::Candidate, lower, candidateSearchLimit},
+        lexiconProvider_.Find({LexiconQuery::Kind::Candidate, lower, candidateSearchLimit, false, maxDistance},
                               [&](const auto& entry) { addRankedEntry(entry, true); });
     } else {
-        lexiconProvider_.Find({LexiconQuery::Kind::Candidate, lower, candidateSearchLimit},
+        lexiconProvider_.Find({LexiconQuery::Kind::Candidate, lower, candidateSearchLimit, false, maxDistance},
                               addRankedEntry);
     }
     for (const auto& prefix : SearchPrefixes(lower)) {
         // Bounded index ranges keep the time per key predictable. Widen this
-        // only after measuring missed candidates on the real packs.
-        lexiconProvider_.Find({LexiconQuery::Kind::Prefix, prefix, 512},
+        // only after measuring missed candidates on the real packs. A
+        // provider with a fuzzy index found these in the Candidate query
+        // (nearSlip): only the others are searched again.
+        lexiconProvider_.Find({LexiconQuery::Kind::Prefix, prefix, 512, lower.size() > 2 || maxDistance < 2},
                               addRankedEntry);
     }
     ranker_.RankCorrections(ranked, lower.size());
@@ -805,7 +844,14 @@ std::vector<Candidate> CandidateGenerator::Generate(std::wstring_view rawText,
                                 ? CandidatePolicySuggestOnly | CandidatePolicyContext
                                 : Offered(lower, entry.raw, CandidatePolicyCorrect);
         const auto sizeBefore = output.size();
-        AddUnique(output, seen, MatchCase(rawText, std::wstring(entry.raw)), SemanticLabel::None, false,
+        // A word from the user's dictionary keeps the capitals it was added
+        // with (a name stays a name).
+        const bool userCapitals = (entry.sourceFlags & CandidateSourceUserDictionary) != 0 &&
+                                  std::any_of(entry.candidate.begin(), entry.candidate.end(),
+                                              [](wchar_t c) { return std::iswupper(c) != 0; });
+        AddUnique(output, seen,
+                  userCapitals ? std::wstring(entry.candidate) : MatchCase(rawText, std::wstring(entry.raw)),
+                  SemanticLabel::None, false,
                   100.0 - static_cast<double>(correction.distance), false, policy,
                   sourceFlags, DictionaryEntryIdFor(entry, SemanticLabel::Original));
         if (output.size() != sizeBefore) ++addedCorrectionCount;

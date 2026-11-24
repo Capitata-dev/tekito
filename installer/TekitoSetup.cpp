@@ -13,7 +13,6 @@
 #include <dwmapi.h>
 #include <dwrite_3.h>
 #include <shellapi.h>
-#include <mfplay.h>
 #include <shlobj.h>
 #include <bcrypt.h>
 #include <sddl.h>
@@ -103,19 +102,18 @@ private:
 };
 
 enum class Screen {
-    Welcome, License, Options, Installing, Done, Failed, Samples,
+    Welcome, License, Options, Installing, Done, Failed,
     Uninstall, Uninstalling, Uninstalled, UninstallFailed,
 };
 
 enum class Action {
     Install, Cancel, Options, ReadLicense, Agree, GetRuntime, CheckRuntime,
-    Back, AcceptLicense, Browse, Shortcut, Finish, Retry, Close, Japanese, Ai, KeepEnglish, Samples,
-    WithoutJapanese, SampleMode, SampleClip,
+    Back, AcceptLicense, Browse, Shortcut, Finish, Retry, Close, Japanese, Ai, KeepEnglish,
+    WithoutJapanese,
     Uninstall, ExportWords, UninstallWithoutExport, OpenExportFolder,
 };
 
-// Tab: a mode of the typing samples; Item: a row of their list.
-enum class Kind { Primary, Secondary, Quiet, Checkbox, Toggle, Link, Tab, Item };
+enum class Kind { Primary, Secondary, Quiet, Checkbox, Toggle, Link };
 
 struct Control {
     Action action;
@@ -124,54 +122,6 @@ struct Control {
     std::wstring label;
     bool enabled{true};
     bool checked{false};
-    // Which mode or clip a Tab or Item stands for.
-    int index{0};
-};
-
-// The typing samples Settings shows, installed with it as
-// settings-ui\samples\<id>-light.mp4 and -dark.mp4, in the same order.
-struct Sample {
-    const wchar_t* id;
-    const wchar_t* english;
-    const wchar_t* japanese;
-};
-constexpr Sample kJapaneseSamples[] = {
-    {L"japanese-convert", L"Convert and enter", L"変換と確定"},
-    {L"japanese-convert-long", L"A long sentence at once", L"長い文をまとめて変換"},
-    {L"japanese-live", L"Live conversion", L"ライブ変換"},
-    {L"japanese-phrases", L"Choose per phrase", L"文節ごとに候補を選ぶ"},
-    {L"japanese-prediction", L"Predictions", L"予測候補"},
-    {L"japanese-english", L"English words in Japanese", L"英単語を混ぜる"},
-    {L"japanese-forms", L"Hiragana, katakana, half-width", L"ひらがな・カタカナ・半角"},
-    {L"japanese-special", L"Dates, sums and symbols", L"日付・計算・記号"},
-    {L"japanese-undo", L"Undo an entry", L"確定の取り消し"},
-    {L"japanese-slips", L"Typo correction", L"入力ミスの修正"},
-};
-constexpr Sample kMixedSamples[] = {
-    {L"mixed-basic", L"Japanese and English mixed", L"日本語と英語をまぜる"},
-    {L"mixed-long", L"A long sentence", L"長い文"},
-    {L"mixed-live", L"Live conversion", L"ライブ変換"},
-    {L"mixed-vowel", L"One vowel", L"母音1文字"},
-    {L"mixed-correction", L"English typos", L"英単語の修正"},
-};
-constexpr Sample kAutoSamples[] = {
-    {L"auto-correct", L"Typo correction", L"入力ミスの修正"},
-    {L"auto-undo", L"Undo a correction", L"修正の取り消し"},
-    {L"auto-completion", L"Word completion", L"単語の補完"},
-    {L"auto-next", L"Next words", L"次の単語"},
-    {L"auto-casual", L"Casual words", L"口語表現"},
-    {L"auto-period", L"Period on Enter", L"Enter でピリオド"},
-};
-struct SampleSet {
-    const wchar_t* english;
-    const wchar_t* japanese;
-    const Sample* samples;
-    std::size_t count;
-};
-constexpr SampleSet kSampleSets[] = {
-    {L"Japanese", L"日本語", kJapaneseSamples, std::size(kJapaneseSamples)},
-    {L"Mix", L"まぜ打ち", kMixedSamples, std::size(kMixedSamples)},
-    {L"Auto", L"Auto", kAutoSamples, std::size(kAutoSamples)},
 };
 
 struct Palette {
@@ -232,6 +182,15 @@ struct Wizard {
     std::atomic<int> installExitCode{1};
     bool completed{false};
     float animation{0.0f};
+    // How far the install is: the step setup runs (InstallStep), what
+    // install.ps1 wrote it is doing (progressFile: "<stage> <fraction>"),
+    // and what the bar shows (0 to 1, never going back).
+    std::filesystem::path progressFile;
+    std::atomic<int> installStep{0};
+    std::wstring progressStage;
+    double progressDone{0.0};
+    float shownProgress{0.0f};
+    int progressPoll{0};
 
     // Interaction.
     int hover{-1};
@@ -240,12 +199,6 @@ struct Wizard {
     bool pressed{false};
     float licenseScroll{0.0f};
 
-    // Typing samples: the mode and clip shown, played in a child window.
-    int sampleMode{0};
-    int sampleClip{0};
-    HWND video{};
-    Com<IMFPMediaPlayer> player;
-    bool sampleMissing{false};
 
     // Uninstalling: the installation, uninstall.ps1 (copied next to this
     // program, out of the folder it removes), whether the user's words are
@@ -576,6 +529,29 @@ bool PayloadMatches(const std::filesystem::path& zip) {
     return matches;
 }
 
+// The steps setup runs, in order (Wizard::installStep).
+enum InstallStep : int { kStepVerify = 0, kStepData, kStepProgram, kStepFinish };
+
+// Where each stage install.ps1 tells (and setup's own check) sits on the
+// bar, as fractions of the whole: the downloads take the most.
+struct StageSpan {
+    const wchar_t* stage;
+    float from;
+    float to;
+};
+constexpr StageSpan kStagesJapaneseAi[] = {
+    {L"verify", 0.00f, 0.04f}, {L"check", 0.04f, 0.05f}, {L"download", 0.05f, 0.50f}, {L"unpack", 0.50f, 0.56f},
+    {L"packs", 0.56f, 0.62f}, {L"program", 0.62f, 0.68f}, {L"finish", 0.68f, 0.70f}, {L"ai", 0.70f, 0.98f},
+};
+constexpr StageSpan kStagesJapanese[] = {
+    {L"verify", 0.00f, 0.05f}, {L"check", 0.05f, 0.06f}, {L"download", 0.06f, 0.72f}, {L"unpack", 0.72f, 0.80f},
+    {L"packs", 0.80f, 0.88f}, {L"program", 0.88f, 0.95f}, {L"finish", 0.95f, 1.00f},
+};
+constexpr StageSpan kStagesEnglish[] = {
+    {L"verify", 0.00f, 0.10f}, {L"check", 0.10f, 0.12f}, {L"packs", 0.12f, 0.50f}, {L"program", 0.50f, 0.85f},
+    {L"finish", 0.85f, 1.00f},
+};
+
 struct InstallChoices {
     std::filesystem::path installRoot;
     bool startMenuShortcut{true};
@@ -644,9 +620,15 @@ bool SetPrivilege(const wchar_t* name, bool on) {
     change.PrivilegeCount = 1;
     change.Privileges[0].Attributes = on ? SE_PRIVILEGE_ENABLED : 0;
     bool wasOn = false;
+    // AdjustTokenPrivileges succeeds without changing a privilege setup does
+    // not hold (ERROR_NOT_ALL_ASSIGNED): then nothing was changed.
     if (LookupPrivilegeValueW(nullptr, name, &change.Privileges[0].Luid) &&
-        AdjustTokenPrivileges(token, FALSE, &change, sizeof(before), &before, &size) && before.PrivilegeCount == 1) {
+        AdjustTokenPrivileges(token, FALSE, &change, sizeof(before), &before, &size) &&
+        GetLastError() == ERROR_SUCCESS && before.PrivilegeCount == 1) {
         wasOn = (before.Privileges[0].Attributes & SE_PRIVILEGE_ENABLED) != 0;
+    } else {
+        // Left as it is: nothing to turn back.
+        wasOn = on;
     }
     CloseHandle(token);
     return wasOn;
@@ -742,7 +724,8 @@ void OpenAsUser(const std::wstring& target) {
 int StepCode(int code) { return code == -1 ? 5 : code == -2 ? 6 : code == -3 ? 7 : code; }
 
 int InstallEmbeddedPackage(const std::filesystem::path& self, const InstallChoices& choices,
-                           std::filesystem::path& installLog) {
+                           std::filesystem::path& installLog, const std::filesystem::path& progressFile,
+                           std::atomic<int>& step) {
     std::uint64_t payloadOffset = 0;
     std::uint64_t payloadSize = 0;
     if (!ReadPayloadBounds(self, payloadOffset, payloadSize)) return 2;
@@ -768,7 +751,8 @@ int InstallEmbeddedPackage(const std::filesystem::path& self, const InstallChoic
                                  L" -StartMenuShortcut:" + flag(choices.startMenuShortcut) +
                                  L" -Japanese:" + flag(choices.japanese) +
                                  L" -KeepEnglishProfile:" + flag(choices.keepEnglish) +
-                                 (choices.ai ? L" -AiModel light" : L"");
+                                 (choices.ai ? L" -AiModel light" : L"") +
+                                 (progressFile.empty() ? std::wstring{} : L" -ProgressFile " + QuotePowerShell(progressFile.wstring()));
     std::filesystem::path userTemp;
     bool userStep = false;
     // Unpacked and checked against its manifest; the user's Data Packs (as
@@ -782,14 +766,17 @@ int InstallEmbeddedPackage(const std::filesystem::path& self, const InstallChoic
                                     tempRoot));
     if (code == 0) {
         userStep = true;
+        step.store(kStepData);
         code = StepCode(RunAsUser(install + L" -Part data", packageRoot, &userTemp));
     }
     if (code == 0) {
         userStep = false;
+        step.store(kStepProgram);
         code = StepCode(RunElevated(install + L" -Part program", tempRoot));
     }
     if (code == 0) {
         userStep = true;
+        step.store(kStepFinish);
         code = StepCode(RunAsUser(install + L" -Part finish", packageRoot, &userTemp));
     }
     // A failed install keeps its record: the user's steps in the user's
@@ -922,14 +909,86 @@ std::wstring FailureMessage(int code, const std::filesystem::path& log) {
     case 21: return Tr(L"The downloaded Japanese data was not the file this installer expects. Try again, or download the latest TEKITO.", L"ダウンロードした日本語データが、このインストーラーの想定と一致しません。もう一度お試しいただくか、最新の TEKITO をダウンロードしてください。");
     default:
         if (UseJapanese()) {
+            // Part of TEKITO may already be in place (the program, its
+            // registration, before Installed apps lists it): setup run again
+            // puts it in place whole.
             return L"インストールがエラー " + std::to_wstring(code) +
-                   L" で停止しました。新規インストールの場合、変更は残っていません。もう一度お試しください。" +
+                   L" で停止しました。途中まで入った TEKITO は、もう一度セットアップを実行すると入れ直されます。" +
                    (log.empty() ? std::wstring() : L"繰り返し起きる場合は、" + log.wstring() + L" に詳しい記録があります。");
         }
         return L"The install step stopped with error " + std::to_wstring(code) +
-               L". If this was a new install, nothing was left behind. Try again" +
-               (log.empty() ? std::wstring(L".") : L"; if it keeps happening, " + log.wstring() + L" says why.");
+               L". Part of TEKITO may already be installed; running setup again installs it whole" +
+               (log.empty() ? std::wstring(L".") : L". If it keeps happening, " + log.wstring() + L" says why.");
     }
+}
+
+// The user at the desktop's temporary folder: where install.ps1, run as
+// the user and elevated, writes how far it is.
+std::filesystem::path UserTempFolder() {
+    const HANDLE token = DesktopUserToken();
+    if (!token) return {};
+    std::filesystem::path folder;
+    LPVOID environment = nullptr;
+    if (CreateEnvironmentBlock(&environment, token, FALSE)) {
+        for (auto* entry = static_cast<const wchar_t*>(environment); *entry; entry += wcslen(entry) + 1) {
+            if (_wcsnicmp(entry, L"TEMP=", 5) == 0) folder = std::filesystem::path(entry + 5);
+        }
+        DestroyEnvironmentBlock(environment);
+    }
+    CloseHandle(token);
+    return folder;
+}
+
+// Reads what install.ps1 last wrote it is doing: "<stage> <fraction>".
+void ReadProgress(Wizard& wizard) {
+    if (wizard.progressFile.empty()) return;
+    std::ifstream in(wizard.progressFile, std::ios::binary);
+    std::string stage;
+    double done = 0.0;
+    if (!(in >> stage >> done) || stage.size() > 16) return;
+    wizard.progressStage.assign(stage.begin(), stage.end());
+    wizard.progressDone = std::clamp(done, 0.0, 1.0);
+}
+
+// The bar's place now: the stage install.ps1 is in, within its span; setup's
+// own check creeps along its span while it runs. Never goes back.
+void UpdateProgress(Wizard& wizard) {
+    const StageSpan* stages = kStagesEnglish;
+    std::size_t count = std::size(kStagesEnglish);
+    if (wizard.japanese && wizard.ai) {
+        stages = kStagesJapaneseAi;
+        count = std::size(kStagesJapaneseAi);
+    } else if (wizard.japanese) {
+        stages = kStagesJapanese;
+        count = std::size(kStagesJapanese);
+    }
+    const auto span = [&](std::wstring_view name) -> const StageSpan* {
+        for (std::size_t i = 0; i < count; ++i) {
+            if (name == stages[i].stage) return &stages[i];
+        }
+        return nullptr;
+    };
+    float at = 0.0f;
+    if (wizard.installStep.load() == kStepVerify || wizard.progressStage.empty()) {
+        const auto* verify = span(L"verify");
+        const float creep = 1.0f - std::exp(-wizard.animation * 0.6f);
+        at = verify->from + (verify->to - verify->from) * 0.9f * creep;
+    } else if (const auto* stage = span(wizard.progressStage)) {
+        at = stage->from + (stage->to - stage->from) * static_cast<float>(wizard.progressDone);
+    }
+    wizard.shownProgress = std::max(wizard.shownProgress, std::min(at, 0.99f));
+}
+
+// What the bar says the install is doing.
+const wchar_t* StageLabel(const Wizard& wizard) {
+    const std::wstring_view stage = wizard.installStep.load() == kStepVerify ? L"verify" : wizard.progressStage;
+    if (stage == L"download") return Tr(L"Downloading the Japanese data", L"日本語のデータをダウンロードしています");
+    if (stage == L"unpack") return Tr(L"Checking the Japanese data", L"日本語のデータを確認しています");
+    if (stage == L"packs") return Tr(L"Installing the dictionaries", L"辞書をインストールしています");
+    if (stage == L"program") return Tr(L"Installing TEKITO", L"TEKITO をインストールしています");
+    if (stage == L"ai") return Tr(L"Downloading the AI model", L"AI モデルをダウンロードしています");
+    if (stage == L"finish") return Tr(L"Finishing", L"仕上げています");
+    return Tr(L"Getting ready", L"準備しています");
 }
 
 void StartInstall(Wizard& wizard) {
@@ -944,6 +1003,16 @@ void StartInstall(Wizard& wizard) {
 #endif
     wizard.screen = Screen::Installing;
     wizard.installExitCode.store(1);
+    wizard.installStep.store(kStepVerify);
+    wizard.progressStage.clear();
+    wizard.progressDone = 0.0;
+    wizard.shownProgress = 0.0f;
+    wizard.animation = 0.0f;
+    if (const auto temp = UserTempFolder(); !temp.empty()) {
+        wizard.progressFile = temp / L"TEKITO-setup-progress.txt";
+        std::error_code ignored;
+        std::filesystem::remove(wizard.progressFile, ignored);
+    }
     SetTimer(wizard.window, kAnimationTimer, 16, nullptr);
     const HWND window = wizard.window;
     const auto self = wizard.self;
@@ -951,7 +1020,8 @@ void StartInstall(Wizard& wizard) {
                                  wizard.japanese && wizard.ai, wizard.japanese && wizard.keepEnglish};
     try {
         wizard.installThread = std::thread([&wizard, window, self, choices] {
-            wizard.installExitCode.store(InstallEmbeddedPackage(self, choices, wizard.installLog));
+            wizard.installExitCode.store(
+                InstallEmbeddedPackage(self, choices, wizard.installLog, wizard.progressFile, wizard.installStep));
             PostMessageW(window, kWizardInstallComplete, 0, 0);
         });
     } catch (...) {
@@ -988,20 +1058,6 @@ constexpr D2D1_RECT_F kOptionsCardJapanese{kMargin, 92.0f, kWidth - kMargin, 318
 // Welcome: the Japanese choice, and the license agreement under it.
 float JapaneseRow(const Wizard& wizard) { return wizard.webViewReady ? 238.0f : 334.0f; }
 float AgreeRow(const Wizard& wizard) { return wizard.webViewReady ? 336.0f : 366.0f; }
-// Typing samples: the list on the left, the clip (600 x 440) on the right.
-constexpr float kSampleTop = 124.0f;
-constexpr float kSampleRow = 26.0f;
-constexpr D2D1_RECT_F kSampleVideo{224.0f, kSampleTop, kWidth - kMargin, kSampleTop + (kWidth - kMargin - 224.0f) * 440.0f / 600.0f};
-
-// The sample modes installed: all three with Japanese, else Auto only.
-std::vector<int> SampleModes(const Wizard& wizard) {
-    return wizard.japanese ? std::vector<int>{0, 1, 2} : std::vector<int>{2};
-}
-
-const SampleSet& ShownSampleSet(const Wizard& wizard) {
-    return kSampleSets[std::clamp(wizard.sampleMode, 0, static_cast<int>(std::size(kSampleSets)) - 1)];
-}
-
 std::vector<Control> Controls(const Wizard& wizard) {
     std::vector<Control> controls;
     switch (wizard.screen) {
@@ -1055,40 +1111,9 @@ std::vector<Control> Controls(const Wizard& wizard) {
         break;
     case Screen::Installing:
         break;
-    case Screen::Samples: {
-        const auto modes = SampleModes(wizard);
-        if (modes.size() > 1) {
-            float x = kMargin;
-            for (const int mode : modes) {
-                const std::wstring name = Tr(kSampleSets[mode].english, kSampleSets[mode].japanese);
-                const float width = TextWidth(wizard, wizard.body.Get(), name) + 32.0f;
-                Control tab{Action::SampleMode, Kind::Tab, D2D1::RectF(x, 78.0f, x + width, 110.0f), name, true,
-                            mode == wizard.sampleMode};
-                tab.index = mode;
-                controls.push_back(tab);
-                x += width + 4.0f;
-            }
-        }
-        const auto& set = ShownSampleSet(wizard);
-        for (std::size_t i = 0; i < set.count; ++i) {
-            const float top = kSampleTop + kSampleRow * static_cast<float>(i);
-            Control item{Action::SampleClip, Kind::Item, D2D1::RectF(kMargin - 10.0f, top, kSampleVideo.left - 14.0f, top + kSampleRow),
-                         Tr(set.samples[i].english, set.samples[i].japanese), true, static_cast<int>(i) == wizard.sampleClip};
-            item.index = static_cast<int>(i);
-            controls.push_back(item);
-        }
-        controls.push_back({Action::Back, Kind::Secondary, FooterButton(1), Tr(L"Back", L"戻る")});
+    case Screen::Done:
         controls.push_back({Action::Finish, Kind::Primary, FooterButton(0), Tr(L"Finish", L"完了")});
         break;
-    }
-    case Screen::Done: {
-        // The typing samples, shown on request only.
-        const std::wstring samples = Tr(L"See typing samples", L"入力の見本を見る");
-        const float width = 16.0f + TextWidth(wizard, wizard.body.Get(), samples);
-        controls.push_back({Action::Samples, Kind::Link, D2D1::RectF((kWidth - width) / 2.0f, 304.0f, (kWidth + width) / 2.0f, 328.0f), samples});
-        controls.push_back({Action::Finish, Kind::Primary, FooterButton(0), Tr(L"Finish", L"完了")});
-        break;
-    }
     case Screen::Uninstall:
         controls.push_back({Action::ExportWords, Kind::Toggle, D2D1::RectF(kOptionsCard.right - 66.0f, kOptionsCard.top + 24.0f,
                                                                           kOptionsCard.right - 18.0f, kOptionsCard.top + 52.0f),
@@ -1394,23 +1419,6 @@ void DrawControl(const Wizard& wizard, const Control& control, bool hovered, boo
         DrawText(wizard, control.label, wizard.body.Get(), D2D1::RectF(r.left + 30.0f, r.top + 2.0f, r.right, r.bottom), p.ink);
         break;
     }
-    case Kind::Tab: {
-        if (control.checked || hovered) {
-            auto fill = Brush(wizard, control.checked ? p.recess : WithAlpha(p.recess, p.recess.a * 0.6f));
-            t->FillRoundedRectangle(Round(r, (r.bottom - r.top) / 2.0f), fill.Get());
-        }
-        DrawText(wizard, control.label, wizard.button.Get(), r, control.checked || hovered ? p.ink : p.ink2);
-        break;
-    }
-    case Kind::Item: {
-        if (control.checked || hovered) {
-            auto fill = Brush(wizard, control.checked ? p.recess : WithAlpha(p.recess, p.recess.a * 0.6f));
-            t->FillRoundedRectangle(Round(r, 8.0f), fill.Get());
-        }
-        DrawText(wizard, control.label, wizard.caption.Get(), D2D1::RectF(r.left + 10.0f, r.top + 5.0f, r.right - 6.0f, r.bottom),
-                 control.checked || hovered ? p.ink : p.ink2);
-        break;
-    }
     case Kind::Toggle: {
         auto track = Brush(wizard, control.checked ? wizard.accent : p.recess);
         t->FillRoundedRectangle(Round(r, 14.0f), track.Get());
@@ -1432,7 +1440,7 @@ void DrawControl(const Wizard& wizard, const Control& control, bool hovered, boo
         const auto ringRect = control.kind == Kind::Checkbox
                                   ? D2D1::RectF(r.left - 4.0f, r.top - 1.0f, r.right + 4.0f, r.bottom + 1.0f)
                                   : D2D1::RectF(r.left - 3.0f, r.top - 3.0f, r.right + 3.0f, r.bottom + 3.0f);
-        const float radius = control.kind == Kind::Checkbox || control.kind == Kind::Link || control.kind == Kind::Item ? 8.0f
+        const float radius = control.kind == Kind::Checkbox || control.kind == Kind::Link ? 8.0f
                                                                                           : (ringRect.bottom - ringRect.top) / 2.0f;
         t->DrawRoundedRectangle(Round(ringRect, radius), ring.Get(), 2.0f);
     }
@@ -1597,11 +1605,24 @@ void Paint(Wizard& wizard) {
                      : Tr(L"This takes about a minute. Please keep this window open.",
                           L"1 分ほどかかります。このウィンドウは開いたままにしてください。"),
                  wizard.captionCentered.Get(), D2D1::RectF(0.0f, 216.0f, kWidth, 236.0f), p.ink2);
-        // Indeterminate progress: a short segment of accent light sliding
-        // along a recessed track.
         const auto track = D2D1::RectF(170.0f, 268.0f, 430.0f, 274.0f);
         auto recess = Brush(wizard, p.recess);
         t->FillRoundedRectangle(Round(track, 3.0f), recess.Get());
+        if (!removing) {
+            // How far: the accent filling the track, what is being done and
+            // the percent under it.
+            const float right = track.left + (track.right - track.left) * wizard.shownProgress;
+            auto light = Brush(wizard, wizard.accent);
+            t->FillRoundedRectangle(Round(D2D1::RectF(track.left, track.top, std::max(right, track.left + 6.0f), track.bottom), 3.0f),
+                                    light.Get());
+            wchar_t percent[16]{};
+            swprintf_s(percent, L"%d%%", static_cast<int>(std::lround(wizard.shownProgress * 100.0f)));
+            DrawText(wizard, std::wstring(StageLabel(wizard)) + L"  " + percent, wizard.captionCentered.Get(),
+                     D2D1::RectF(0.0f, 284.0f, kWidth, 304.0f), p.ink2);
+            break;
+        }
+        // Uninstalling: a short segment of accent light sliding along the
+        // recessed track.
         const float span = track.right - track.left;
         const float segment = 84.0f;
         const float phase = std::fmod(wizard.animation, 1.0f);
@@ -1674,20 +1695,6 @@ void Paint(Wizard& wizard) {
         }
         break;
     }
-    case Screen::Samples: {
-        DrawText(wizard, Tr(L"Typing samples", L"入力の見本"), wizard.heading.Get(), D2D1::RectF(kMargin, 34.0f, kWidth - kMargin, 64.0f), p.ink);
-        // The clip plays in a child window over this frame.
-        const auto& v = kSampleVideo;
-        auto recess = Brush(wizard, p.recess);
-        auto edge = Brush(wizard, p.hairline);
-        t->FillRectangle(v, recess.Get());
-        t->DrawRectangle(D2D1::RectF(v.left - 0.5f, v.top - 0.5f, v.right + 0.5f, v.bottom + 0.5f), edge.Get(), 1.0f);
-        if (wizard.sampleMissing) {
-            DrawText(wizard, Tr(L"This sample isn't available.", L"この見本は表示できません。"), wizard.captionCentered.Get(),
-                     D2D1::RectF(v.left, (v.top + v.bottom) / 2.0f - 10.0f, v.right, (v.top + v.bottom) / 2.0f + 10.0f), p.ink2);
-        }
-        break;
-    }
     case Screen::UninstallFailed:
         DrawText(wizard, Tr(L"Uninstall couldn't finish", L"アンインストールを完了できませんでした"), wizard.heading.Get(),
                  D2D1::RectF(kMargin, 40.0f, kWidth - kMargin, 72.0f), p.ink);
@@ -1720,100 +1727,7 @@ bool OnEnabledControl(const Wizard& wizard, int index) {
     return index >= 0 && index < static_cast<int>(controls.size()) && controls[static_cast<std::size_t>(index)].enabled;
 }
 
-// Plays each clip muted, from the start again when it ends, with the clip's
-// own page color around a clip of another shape.
-class SamplePlayback final : public IMFPMediaPlayerCallback {
-public:
-    COLORREF border{RGB(255, 255, 255)};
-    STDMETHODIMP QueryInterface(REFIID id, void** object) override {
-        if (id == __uuidof(IUnknown) || id == __uuidof(IMFPMediaPlayerCallback)) {
-            *object = static_cast<IMFPMediaPlayerCallback*>(this);
-            return S_OK;
-        }
-        *object = nullptr;
-        return E_NOINTERFACE;
-    }
-    // One instance for the process: nothing to free.
-    STDMETHODIMP_(ULONG) AddRef() override { return 1; }
-    STDMETHODIMP_(ULONG) Release() override { return 1; }
-    void STDMETHODCALLTYPE OnMediaPlayerEvent(MFP_EVENT_HEADER* event) override {
-        if (!event || !event->pMediaPlayer || FAILED(event->hrEvent)) return;
-        if (event->eEventType == MFP_EVENT_TYPE_MEDIAITEM_SET) {
-            event->pMediaPlayer->SetBorderColor(border);
-            event->pMediaPlayer->SetMute(TRUE);
-            event->pMediaPlayer->Play();
-        } else if (event->eEventType == MFP_EVENT_TYPE_PLAYBACK_ENDED) {
-            PROPVARIANT start;
-            PropVariantInit(&start);
-            start.vt = VT_I8;
-            start.hVal.QuadPart = 0;
-            event->pMediaPlayer->SetPosition(MFP_POSITIONTYPE_100NS, &start);
-            event->pMediaPlayer->Play();
-        }
-    }
-};
-SamplePlayback g_samplePlayback;
-
-void StopSample(Wizard& wizard) {
-    if (wizard.player) {
-        wizard.player->Shutdown();
-        wizard.player.Reset();
-    }
-    if (wizard.video) ShowWindow(wizard.video, SW_HIDE);
-}
-
-void PlaceSampleVideo(const Wizard& wizard) {
-    if (!wizard.video) return;
-    const auto px = [&](float dips) { return MulDiv(static_cast<int>(dips + 0.5f), static_cast<int>(wizard.dpi), 96); };
-    SetWindowPos(wizard.video, nullptr, px(kSampleVideo.left), px(kSampleVideo.top), px(kSampleVideo.right) - px(kSampleVideo.left),
-                 px(kSampleVideo.bottom) - px(kSampleVideo.top), SWP_NOZORDER | SWP_NOACTIVATE);
-    if (wizard.player) wizard.player->UpdateVideo();
-}
-
-// Plays the clip chosen, in the theme the setup is shown in, from TEKITO
-// just installed.
-void ShowSample(Wizard& wizard) {
-    StopSample(wizard);
-    const auto& set = ShownSampleSet(wizard);
-    wizard.sampleClip = std::clamp(wizard.sampleClip, 0, static_cast<int>(set.count) - 1);
-    const auto clip = wizard.installRoot / L"settings-ui" / L"samples" /
-                      (std::wstring(set.samples[wizard.sampleClip].id) + (wizard.dark ? L"-dark.mp4" : L"-light.mp4"));
-    std::error_code error;
-    wizard.sampleMissing = !wizard.video || !std::filesystem::is_regular_file(clip, error);
-    if (wizard.sampleMissing) return;
-    PlaceSampleVideo(wizard);
-    ShowWindow(wizard.video, SW_SHOWNOACTIVATE);
-    g_samplePlayback.border = wizard.dark ? RGB(32, 32, 32) : RGB(255, 255, 255);
-    if (FAILED(MFPCreateMediaPlayer(clip.c_str(), FALSE, 0, &g_samplePlayback, wizard.video, wizard.player.Put()))) {
-        wizard.player.Reset();
-        ShowWindow(wizard.video, SW_HIDE);
-        wizard.sampleMissing = true;
-    }
-}
-
-LRESULT CALLBACK SampleVideoProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
-    if (message == WM_PAINT) {
-        const auto* wizard = reinterpret_cast<const Wizard*>(GetWindowLongPtrW(window, GWLP_USERDATA));
-        PAINTSTRUCT paint{};
-        const HDC dc = BeginPaint(window, &paint);
-        if (wizard && wizard->player) {
-            wizard->player->UpdateVideo();
-        } else {
-            FillRect(dc, &paint.rcPaint, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-        }
-        EndPaint(window, &paint);
-        return 0;
-    }
-    if (message == WM_ERASEBKGND) return 1;
-    return DefWindowProcW(window, message, wParam, lParam);
-}
-
 void Go(Wizard& wizard, Screen screen) {
-    if (wizard.screen == Screen::Samples && screen != Screen::Samples) StopSample(wizard);
-    if (screen == Screen::Samples) {
-        const auto modes = SampleModes(wizard);
-        if (std::find(modes.begin(), modes.end(), wizard.sampleMode) == modes.end()) wizard.sampleMode = modes.front();
-    }
     wizard.screen = screen;
     wizard.hover = -1;
     wizard.focus = 0;
@@ -1823,11 +1737,10 @@ void Go(Wizard& wizard, Screen screen) {
     for (std::size_t i = 0; i < controls.size(); ++i) {
         if (controls[i].kind == Kind::Primary) wizard.focus = static_cast<int>(i);
     }
-    if (screen == Screen::Samples) ShowSample(wizard);
     InvalidateRect(wizard.window, nullptr, FALSE);
 }
 
-void Activate(Wizard& wizard, Action action, int index = 0) {
+void Activate(Wizard& wizard, Action action) {
     switch (action) {
     case Action::Install:
         if (wizard.agreed && wizard.webViewReady) StartInstall(wizard);
@@ -1841,7 +1754,7 @@ void Activate(Wizard& wizard, Action action, int index = 0) {
     case Action::Agree: wizard.agreed = !wizard.agreed; break;
     case Action::GetRuntime: OpenWebView2DownloadPage(); break;
     case Action::CheckRuntime: wizard.webViewReady = HasWebView2Runtime(); break;
-    case Action::Back: Go(wizard, wizard.screen == Screen::Samples ? Screen::Done : Screen::Welcome); return;
+    case Action::Back: Go(wizard, Screen::Welcome); return;
     case Action::AcceptLicense:
         wizard.agreed = true;
         Go(wizard, Screen::Welcome);
@@ -1850,20 +1763,6 @@ void Activate(Wizard& wizard, Action action, int index = 0) {
     case Action::Japanese: wizard.japanese = !wizard.japanese; break;
     case Action::Ai: wizard.ai = !wizard.ai; break;
     case Action::KeepEnglish: wizard.keepEnglish = !wizard.keepEnglish; break;
-    case Action::Samples:
-        wizard.sampleMode = SampleModes(wizard).front();
-        wizard.sampleClip = 0;
-        Go(wizard, Screen::Samples);
-        return;
-    case Action::SampleMode:
-        wizard.sampleMode = index;
-        wizard.sampleClip = 0;
-        ShowSample(wizard);
-        break;
-    case Action::SampleClip:
-        wizard.sampleClip = index;
-        ShowSample(wizard);
-        break;
     case Action::Finish:
         wizard.completed = true;
         DestroyWindow(wizard.window);
@@ -1952,7 +1851,6 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         const auto* suggested = reinterpret_cast<const RECT*>(lParam);
         SetWindowPos(window, nullptr, suggested->left, suggested->top, suggested->right - suggested->left,
                      suggested->bottom - suggested->top, SWP_NOZORDER | SWP_NOACTIVATE);
-        PlaceSampleVideo(*wizard);
         return 0;
     }
     case WM_SETTINGCHANGE:
@@ -2003,7 +1901,7 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         const auto controls = Controls(*wizard);
         if (hit >= 0 && controls[hit].enabled) {
             wizard->focus = hit;
-            Activate(*wizard, controls[hit].action, controls[hit].index);
+            Activate(*wizard, controls[hit].action);
         }
         return 0;
     }
@@ -2031,18 +1929,11 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         }
         if ((wParam == VK_RETURN || wParam == VK_SPACE) && !controls.empty()) {
             const int index = std::clamp(wizard->focus, 0, static_cast<int>(controls.size()) - 1);
-            if (controls[index].enabled) Activate(*wizard, controls[index].action, controls[index].index);
-            return 0;
-        }
-        if (wizard->screen == Screen::Samples && (wParam == VK_UP || wParam == VK_DOWN)) {
-            const int count = static_cast<int>(ShownSampleSet(*wizard).count);
-            const int next = std::clamp(wizard->sampleClip + (wParam == VK_UP ? -1 : 1), 0, count - 1);
-            if (next != wizard->sampleClip) Activate(*wizard, Action::SampleClip, next);
+            if (controls[index].enabled) Activate(*wizard, controls[index].action);
             return 0;
         }
         if (wParam == VK_ESCAPE) {
             if (wizard->screen == Screen::License || wizard->screen == Screen::Options) Go(*wizard, Screen::Welcome);
-            else if (wizard->screen == Screen::Samples) Go(*wizard, Screen::Done);
             else if (wizard->screen != Screen::Installing && wizard->screen != Screen::Uninstalling) DestroyWindow(window);
             return 0;
         }
@@ -2061,6 +1952,10 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     case WM_TIMER:
         if (wParam == kAnimationTimer) {
             wizard->animation += 0.016f / 1.4f;
+            if (wizard->screen == Screen::Installing) {
+                if (++wizard->progressPoll % 12 == 0) ReadProgress(*wizard);
+                UpdateProgress(*wizard);
+            }
             InvalidateRect(window, nullptr, FALSE);
             return 0;
         }
@@ -2085,7 +1980,6 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         DestroyWindow(window);
         return 0;
     case WM_DESTROY:
-        StopSample(*wizard);
         PostQuitMessage(0);
         return 0;
     default:
@@ -2098,8 +1992,11 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 // Preview build (tekito_setup_preview): opens one screen without elevation,
 // saves a screenshot of the window and exits.
 //   tekito_setup_preview.exe <screen> <out.bmp> [nowebview] [unchecked] [nojapanese] [nodownload] [ai] [stay]
+//                            [stage:<stage> done:<fraction>]
+// stage, done: the installing screen as install.ps1 told it (stage:download
+// done:0.42).
 // stay: keeps the screen open to try, with no screenshot.
-// screen: welcome | license | options | installing | done | failed | samples
+// screen: welcome | license | options | installing | done | failed
 //         | uninstall | uninstalling | uninstalled | uninstallfailed
 struct PreviewRequest {
     Screen screen{Screen::Welcome};
@@ -2112,6 +2009,8 @@ struct PreviewRequest {
     // The AI model chosen; on the done screen, it could not be downloaded.
     bool ai{false};
     bool stay{false};
+    std::wstring stage;
+    double done{0.0};
 };
 PreviewRequest g_preview;
 
@@ -2183,16 +2082,6 @@ bool ShowWizard(const std::filesystem::path& self, const std::filesystem::path& 
                                         &wizard);
     if (!window) return false;
     wizard.dpi = GetDpiForWindow(window);
-    // The typing samples play in this child window.
-    WNDCLASSEXW videoClass{};
-    videoClass.cbSize = sizeof(videoClass);
-    videoClass.lpfnWndProc = SampleVideoProc;
-    videoClass.hInstance = windowClass.hInstance;
-    videoClass.lpszClassName = L"TekitoSetupSample";
-    RegisterClassExW(&videoClass);
-    wizard.video = CreateWindowExW(0, videoClass.lpszClassName, L"", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 1, 1, window, nullptr,
-                                   windowClass.hInstance, nullptr);
-    if (wizard.video) SetWindowLongPtrW(wizard.video, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&wizard));
     ApplyTheme(wizard);
     SizeWindow(wizard);
     RECT rect{};
@@ -2241,6 +2130,12 @@ bool ShowWizard(const std::filesystem::path& self, const std::filesystem::path& 
     }
     KillTimer(window, kAnimationTimer);
     wizard.animation = 0.35f;
+    if (!g_preview.stage.empty()) {
+        wizard.installStep.store(kStepData);
+        wizard.progressStage = g_preview.stage;
+        wizard.progressDone = g_preview.done;
+        UpdateProgress(wizard);
+    }
     InvalidateRect(window, nullptr, FALSE);
     UpdateWindow(window);
     Sleep(200);
@@ -2278,7 +2173,6 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                          : screen == L"installing" ? Screen::Installing
                          : screen == L"done" ? Screen::Done
                          : screen == L"failed" ? Screen::Failed
-                         : screen == L"samples" ? Screen::Samples
                          : screen == L"uninstall" ? Screen::Uninstall
                          : screen == L"uninstalling" ? Screen::Uninstalling
                          : screen == L"uninstalled" ? Screen::Uninstalled
@@ -2292,6 +2186,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             if (std::wstring_view(argv[i]) == L"nodownload") g_preview.noDownload = true;
             if (std::wstring_view(argv[i]) == L"stay") g_preview.stay = true;
             if (std::wstring_view(argv[i]) == L"ai") g_preview.ai = true;
+            if (std::wstring_view(argv[i]).starts_with(L"stage:")) g_preview.stage = argv[i] + 6;
+            if (std::wstring_view(argv[i]).starts_with(L"done:")) g_preview.done = _wtof(argv[i] + 5);
         }
     }
     LocalFree(argv);

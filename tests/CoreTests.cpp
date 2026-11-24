@@ -11,6 +11,7 @@
 #include "Core/RunTogether.h"
 #include "Core/SpaceBoundaryPolicy.h"
 #include "Core/SpellingVariants.h"
+#include "Core/SymSpellIndex.h"
 #include "Core/UserDictionary.h"
 #include "Core/UserLexiconProvider.h"
 #include "Core/UserLearning.h"
@@ -22,12 +23,14 @@
 #include "UserData/UserDataEncryption.h"
 #include "UserData/UserDictionaryFile.h"
 #include "UserData/DataPackValidation.h"
+#include "UserData/AiModelInstall.h"
 #include "UserData/ImeDictionaryImport.h"
 #include "UserData/PostalCodeImport.h"
 #include "sqlite3.h"
 #include "UserData/RuntimeModeState.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cwctype>
 #include <cstdlib>
@@ -166,6 +169,16 @@ void TestSpaceBoundaryAndAutoApplyPolicy() {
     });
     Require(state.OnSpace().text == L"target " && state.IsActive(),
             "User Dictionary correct policy can be accepted at Space");
+
+    // Slang is offered, never put in by itself, even marked as a correction.
+    const tekito::AutoApplyPolicy slangPolicy;
+    const std::vector<tekito::Candidate> slangCandidates{
+        {L"gonna", tekito::SemanticLabel::Slang, false, 100.0, false, tekito::CandidatePolicyCorrect,
+         tekito::CandidateSourceSingleEdit},
+        {L"goona", tekito::SemanticLabel::Original, true},
+    };
+    Require(!slangPolicy.SelectForBoundary(L"goona", slangCandidates, std::nullopt),
+            "slang is never applied by itself");
 
     state.BeginOrUpdate(L"protected", {
         {L"target", tekito::SemanticLabel::Standard, false, 100.0, false,
@@ -654,6 +667,10 @@ void TestCandidateEngine() {
     Require(lowerCandidates[1].text == L"neme" && lowerCandidates[1].isOriginal,
             "generated correction keeps original candidate near the top");
 
+    tekito::ConversionRequest runTogether;
+    runTogether.rawText = L"seeyouonmonday";
+    (void)engine.Convert(runTogether);  // An engine with a dictionary alone has no frequencies: no split, no crash.
+
     tekito::ConversionRequest todayRequest;
     todayRequest.rawText = L"today";
     const auto today = engine.Convert(todayRequest).candidates;
@@ -1115,6 +1132,24 @@ void TestTypoModelBoundary() {
                                       {L"nginx", L"nine"}, {L"fcitx5", L"city5"}}) {
         Require(!tekito::IsPlausibleSlip(typed, word), "a word the dictionary lacks is not taken for another");
     }
+
+    // A doubled letter typed once costs what one typed twice does.
+    Require(std::abs(model.WeightedCost(L"bok", L"book") - model.WeightedCost(L"book", L"bok")) < 1e-9 &&
+                model.WeightedCost(L"bok", L"book") < model.WeightedCost(L"bok", L"bock"),
+            "a doubled letter typed once is a cheap slip");
+
+    // Two letters swapped are one edit, also in the fuzzy index.
+    Require(tekito::BoundedEditDistance("teh", "the", 2) == 1 && tekito::BoundedEditDistance("bacx", "abcd", 2) == 2 &&
+                tekito::BoundedEditDistance("abc", "xyz", 1) == 2,
+            "edit distance counts a swap of two letters as one");
+    tekito::SymSpellIndex index;
+    index.Build({"the", "abcd", "then"});
+    const auto finds = [&](std::string_view query, std::size_t distance, std::string_view word) {
+        const auto found = index.Lookup(query, distance);
+        return std::find(found.begin(), found.end(), word) != found.end();
+    };
+    Require(finds("teh", 1, "the") && finds("bacx", 2, "abcd") && !finds("bacx", 1, "abcd"),
+            "the fuzzy index finds a word with two letters swapped");
 }
 
 void TestTargetTextCandidateDiagnostics() {
@@ -1676,16 +1711,17 @@ void TestLocalDataPackProviders() {
     const auto hall = engine->Convert({L"hall"});
     Require(hall.candidates.size() > 1 && hall.candidates.front().text == L"hall",
             "a valid longer prefix keeps raw first while still offering candidates");
-    const bool hasHello = std::any_of(hall.candidates.begin(), hall.candidates.end(), [](const auto& candidate) {
-        return candidate.text == L"hello";
+    // A word this short is offered the words one edit away (hello is two).
+    const bool hasHell = std::any_of(hall.candidates.begin(), hall.candidates.end(), [](const auto& candidate) {
+        return candidate.text == L"hell";
     });
-    if (!hasHello) {
+    if (!hasHell) {
         std::wcerr << L"[hall candidates]";
         for (const auto& candidate : hall.candidates) std::wcerr << L" " << candidate.text;
         std::wcerr << L"\n";
     }
-    Require(hasHello,
-            "fuzzy candidate generation offers hello for hall without auto-applying it");
+    Require(hasHell,
+            "fuzzy candidate generation offers hell for hall without auto-applying it");
     contextualBoundary.BeginOrUpdate(L"hall", hall.candidates);
     Require(contextualBoundary.OnSpace().text == L"hall ",
             "fuzzy suggestions for a valid word remain opt-in");
@@ -1750,6 +1786,30 @@ void TestUserDictionaryImportExport() {
                 HasFlag(entry->policyFlags, tekito::CandidatePolicyProtect) &&
                 entry->caseSensitive && !entry->enabled,
             "user dictionary import preserves escaped text and policy metadata");
+    auto partial = path;
+    partial += L".partial";
+    Require(!std::filesystem::exists(partial), "an export leaves nothing beside the file");
+    // A flag that is neither 0 nor 1 turns the file away; Windows' line
+    // endings are read.
+    const auto writeFile = [&](const std::string& body) {
+        std::ofstream(path, std::ios::binary) << body;
+    };
+    const std::string head = "TEKITO_USER_DICTIONARY_V1\r\nid\traw_hex\tcandidate_hex\tpolicy_flags\tcase_sensitive\tenabled\r\n";
+    writeFile(head + "3\t0061\t0062\t0\t0\t1\r\n");
+    tekito::UserDictionary crlf;
+    Require(tekito::userdata::ImportUserDictionary(path, crlf) && crlf.Find(3) && crlf.Find(3)->enabled,
+            "user dictionary import reads Windows line endings");
+    writeFile(head + "3\t0061\t0062\t0\t0\tyes\r\n");
+    tekito::UserDictionary badFlag;
+    Require(!tekito::userdata::ImportUserDictionary(path, badFlag), "a flag that is not 0 or 1 is turned away");
+    std::string many = head;
+    for (int i = 1; i <= 20000; ++i) many += std::to_string(i) + "\t0061\t0062\t0\t0\t1\n";
+    writeFile(many);
+    tekito::UserDictionary big;
+    const auto start = std::chrono::steady_clock::now();
+    Require(tekito::userdata::ImportUserDictionary(path, big) && big.Entries().size() == 20000 &&
+                std::chrono::steady_clock::now() - start < std::chrono::seconds(5),
+            "many words are imported without looking through all of them for each");
     std::filesystem::remove(path, error);
 }
 
@@ -1969,6 +2029,12 @@ void TestPostalCodeImport() {
 }
 
 void TestDataPackValidation() {
+    Require(tekito::userdata::IsPlainPackId(L"japanese-core") && tekito::userdata::IsPlainPackId(L"ai-runtime"),
+            "pack names are plain folder names");
+    Require(!tekito::userdata::IsPlainPackId(L"") && !tekito::userdata::IsPlainPackId(L"..") &&
+                !tekito::userdata::IsPlainPackId(L"../outside") && !tekito::userdata::IsPlainPackId(L"a\\b") &&
+                !tekito::userdata::IsPlainPackId(L"C:") && !tekito::userdata::IsPlainPackId(L"Japanese-Core"),
+            "a pack name is never a path");
     const auto dataRoot = tekito::ExternalLexiconProvider::DataPackRoot();
     for (const auto& pack : {L"standard-english", L"wikipedia-common-misspellings",
                              L"dictionary-display", L"frequency", L"phrase", L"slang",
@@ -2001,6 +2067,66 @@ void TestDataPackValidation() {
                 !invalidStatus.valid,
             "checksum mismatch rejects an invalid optional data pack");
     std::filesystem::remove_all(invalidRoot, error);
+}
+
+void TestDataPackInstall() {
+    namespace fs = std::filesystem;
+    std::error_code error;
+    const auto work = fs::temp_directory_path() / L"tekito-pack-install";
+    fs::remove_all(work, error);
+    const auto root = work / L"data";
+    fs::create_directories(root / L"test-pack");
+    std::ofstream(root / L"test-pack" / L"model.data") << "old";
+    const wchar_t* windows = _wgetenv(L"SystemRoot");
+    const auto tar = fs::path(windows ? windows : L"C:\\Windows") / L"System32" / L"tar.exe";
+    // A zip of test-pack, its model.data's hash in the manifest right or not.
+    const auto makeZip = [&](const std::string& data, bool rightHash, const std::wstring& name) {
+        const auto source = work / (name + L".src");
+        const auto pack = source / L"test-pack";
+        fs::create_directories(pack);
+        std::ofstream(pack / L"NOTICE") << "test pack\n";
+        std::ofstream(pack / L"model.onnx") << "graph";
+        std::ofstream(pack / L"model.data") << data;
+        const auto dataHash = rightHash ? tekito::userdata::FileSha256(pack / L"model.data") : std::string(64, '0');
+        std::ofstream(pack / L"manifest.json")
+            << R"({"pack_id":"test-pack","version":"1","language":"ja-JP","type":"test","file":"model.onnx",)"
+            << R"("sha256":{"file":")" << tekito::userdata::FileSha256(pack / L"model.onnx") << R"(","model.data":")"
+            << dataHash << R"("},"license":"TEST","notice_file":"NOTICE"})";
+        const auto zip = work / (name + L".zip");
+        const std::wstring command = L"\"\"" + tar.wstring() + L"\" -a -c -f \"" + zip.wstring() + L"\" -C \"" +
+                                     source.wstring() + L"\" test-pack\"";
+        Require(_wsystem(command.c_str()) == 0, "tar.exe makes the test pack's ZIP");
+        return zip;
+    };
+    const auto readData = [&] {
+        std::ifstream in(root / L"test-pack" / L"model.data", std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    };
+    const auto good = makeZip("new", true, L"good");
+    Require(tekito::userdata::InstallDataPacks(good, tekito::userdata::FileSha256(good), {L"test-pack"}, root) ==
+                    tekito::userdata::AiModelInstallError::None &&
+                readData() == "new" && !fs::exists(root / L"test-pack.old") &&
+                !fs::exists(root / L"japanese-data.download"),
+            "a pack is put in place of the one there, and nothing is left beside it");
+    const auto bad = makeZip("changed", false, L"bad");
+    Require(tekito::userdata::InstallDataPacks(bad, tekito::userdata::FileSha256(bad), {L"test-pack"}, root) ==
+                    tekito::userdata::AiModelInstallError::Invalid &&
+                readData() == "new",
+            "a pack whose files do not match its manifest is turned away, and the one there kept");
+    Require(tekito::userdata::InstallDataPacks(good, std::string(64, '0'), {L"test-pack"}, root) ==
+                tekito::userdata::AiModelInstallError::Checksum,
+            "a zip that is not the one expected is turned away");
+    Require(tekito::userdata::AiPackVersion(L"test-pack", root) == L"1" &&
+                tekito::userdata::AiPackVersion(L"no-such-pack", root).empty(),
+            "a pack's version is read from its manifest");
+    fs::remove_all(work, error);
+    using tekito::userdata::OlderVersion;
+    Require(OlderVersion(L"2026.11", L"2026.12") && OlderVersion(L"2026.11", L"2026.11.2") &&
+                OlderVersion(L"2026.9", L"2026.11") && OlderVersion(L"", L"2026.11") && OlderVersion(L"x", L"2026.11"),
+            "an older version is found older, part by part as numbers");
+    Require(!OlderVersion(L"2026.11", L"2026.11") && !OlderVersion(L"2026.11.0", L"2026.11") &&
+                !OlderVersion(L"2026.12", L"2026.11") && !OlderVersion(L"2026.11", L"bad"),
+            "the same or a newer version is not offered to be replaced");
 }
 
 class TestFrequencyProvider final : public tekito::IFrequencyProvider {
@@ -2056,6 +2182,33 @@ void TestRankingDataBoundaries() {
     ranker.RankCorrections(personalized, 4);
     Require(personalized.front().entry.raw == L"meme",
             "candidate ranker applies a bounded learned preference among similar candidates");
+
+    {
+        // Learning past a threshold and the combined score could make a
+        // circle (A before B before C before A); the order is the same
+        // whatever order the candidates came in.
+        const tekito::BuiltinLexiconEntry a{L"aaaa", {}, tekito::SemanticLabel::Original, tekito::SemanticLabel::None, true, true};
+        const tekito::BuiltinLexiconEntry b{L"bbbb", {}, tekito::SemanticLabel::Original, tekito::SemanticLabel::None, true, true};
+        const tekito::BuiltinLexiconEntry c{L"cccc", {}, tekito::SemanticLabel::Original, tekito::SemanticLabel::None, true, true};
+        std::vector<tekito::CorrectionCandidate> base{
+            {1, false, false, false, false, false, a, L"aaaa", {9.82, 0.0, -0.14}},
+            {1, false, false, false, false, false, b, L"bbbb", {6.31, 0.0, 0.18}},
+            {1, false, false, false, false, false, c, L"cccc", {0.19, 0.0, 0.20}},
+        };
+        std::vector<std::wstring> first;
+        std::sort(base.begin(), base.end(), [](const auto& l, const auto& r) { return l.entry.raw < r.entry.raw; });
+        bool same = true;
+        do {
+            auto ranked = base;
+            ranker.RankCorrections(ranked, 4);
+            std::vector<std::wstring> order;
+            for (const auto& candidate : ranked) order.emplace_back(candidate.entry.raw);
+            if (first.empty()) first = order;
+            same = same && order == first;
+        } while (std::next_permutation(base.begin(), base.end(),
+                                       [](const auto& l, const auto& r) { return l.entry.raw < r.entry.raw; }));
+        Require(same, "the ranker's order does not depend on the order candidates came in");
+    }
 }
 
 void TestCompositeLexiconProvider() {
@@ -2162,6 +2315,21 @@ void TestUserLexiconProviderBoundary() {
     const auto correctionBoundary = state.OnSpace();
     Require(correctionBoundary.text == L"name " && state.IsActive(),
             "User Dictionary correct policy accepts its candidate at Space");
+
+    // A slip in a word the user added is put right to it, in its capitals;
+    // a mapping's typed side (neme) is not a word to put slips right to.
+    tekito::UserDictionary words;
+    Require(words.Add({3, L"ammotrack", L"ammotrack"}) && words.Add({4, L"zentrix", L"Zentrix"}) &&
+                words.Add({5, L"neme", L"name", tekito::CandidatePolicyCorrect}),
+            "user words are added");
+    const tekito::UserLexiconProvider wordProvider(words);
+    const tekito::CandidateGenerator wordGenerator(wordProvider);
+    const auto offers = [&](std::wstring_view typed, std::wstring_view word) {
+        const auto found = wordGenerator.Generate(typed);
+        return std::any_of(found.begin(), found.end(), [&](const auto& candidate) { return candidate.text == word; });
+    };
+    Require(offers(L"ammotrak", L"ammotrack") && offers(L"zentirx", L"Zentrix") && !offers(L"nemo", L"neme"),
+            "a slip in a user word offers the word");
 }
 
 void TestUserDictionaryEngineConnection() {
@@ -2336,7 +2504,6 @@ void TestSqliteUserSettingsRepository() {
     source.candidateRows = 15;
     source.mixPunctuation = 2;
     source.mixKanjiVariants = false;
-    source.aiSettingsControl = 2;
     source.meaningsEnabled = false;
     source.japaneseSwitchOrder = 2;
     source.japaneseEnabled = false;
@@ -2379,6 +2546,25 @@ void TestSqliteUserSettingsRepository() {
                     modes[2].first == tekito::InputMode::Direct && modes[3].first == tekito::InputMode::Mixed &&
                     !tekito::userdata::ValidSwitchOrder(1224) && !tekito::userdata::ValidSwitchOrder(12345),
                 "the switch order lists each mode once, in the order chosen");
+        // The switch key's next mode, as the companion's click goes too.
+        using tekito::InputMode;
+        tekito::userdata::UserSettings round;
+        round.japaneseEnabled = true;
+        round.mixedTypingEnabled = true;
+        round.switchOrder = 1234;
+        round.switchModes = 1 | 2 | 4;
+        const auto next = [&](InputMode mode, bool japanese = true) {
+            return tekito::userdata::NextSwitchMode(round, japanese, mode);
+        };
+        Require(next(InputMode::Japanese) == InputMode::Mixed && next(InputMode::Mixed) == InputMode::Convert &&
+                    next(InputMode::Convert) == InputMode::Japanese && next(InputMode::Direct) == InputMode::Japanese,
+                "the switch key goes round the chosen modes in order");
+        Require(next(InputMode::Convert, false) == InputMode::Direct && next(InputMode::Direct, false) == InputMode::Convert,
+                "on the English keyboard, Auto and Direct");
+        round.mixedTypingEnabled = false;
+        Require(next(InputMode::Japanese) == InputMode::Convert && next(InputMode::Convert) == InputMode::Japanese &&
+                    tekito::userdata::AvailableMode(round, true, InputMode::Mixed) == InputMode::Japanese,
+                "a mode turned off is left out, Mix standing for Japanese");
     }
     {
         // Older values: 常用 and 人名用, and numbers as typed.
@@ -2411,7 +2597,7 @@ void TestSqliteUserSettingsRepository() {
                 loaded.japaneseProfileEnglishMode == tekito::InputMode::Direct &&
                 loaded.japaneseSpaceWidth == 2 && loaded.japanesePunctuation == 3 && loaded.japaneseDigitWidth == 0 /* as kanji numbers (style 4) start from */ && loaded.japaneseSymbolWidth == 1 && loaded.advancedSettings &&
                 !loaded.japanesePredictionEnabled &&
-                loaded.candidateRows == 15 && loaded.aiSettingsControl == 2 && loaded.mixPunctuation == 2 && !loaded.mixKanjiVariants && !loaded.meaningsEnabled && loaded.japaneseSwitchOrder == 2 &&
+                loaded.candidateRows == 15 && loaded.mixPunctuation == 2 && !loaded.mixKanjiVariants && !loaded.meaningsEnabled && loaded.japaneseSwitchOrder == 2 &&
                     !loaded.japaneseEnabled && !loaded.modeIndicatorEnabled,
             "settings repository restores the keyboard and Japanese settings");
     Require(!loaded.dateConversion && !loaded.numberConversion && !loaded.symbolConversion &&
@@ -2660,6 +2846,17 @@ void TestUserDataEncryption() {
         Require(rescued.Open() && rescued.LoadRecentConversions(conversions) && conversions.size() == 2,
                 "with everything that was kept");
     }
+    Require(!tekito::userdata::RescueDatabase(database, tekito::userdata::UserKeyPath(database), "0000-0000-0000-0000-0000-0000",
+                                              plain) &&
+                fs::exists(plain) && !tekito::userdata::DatabaseEncrypted(plain),
+            "a rescue that fails leaves the earlier rescue as it was");
+    Require(!tekito::userdata::RescueDatabase(database, tekito::userdata::UserKeyPath(database), lower, database) &&
+                tekito::userdata::DatabaseEncrypted(database) && recalled(L"SECRETWORDTWO"),
+            "a rescue never writes over the database it reads");
+    Require(!tekito::userdata::RescueDatabase(database, tekito::userdata::UserKeyPath(database), lower,
+                                              tekito::userdata::UserKeyPath(database)) &&
+                recalled(L"SECRETWORDTWO"),
+            "nor over its key");
 
     {
         // A new recovery code while another connection has the database: a
@@ -2763,6 +2960,7 @@ int main() {
     TestUserLearningStore();
     TestSqliteUserLearningRepository();
     TestDataPackValidation();
+    TestDataPackInstall();
     TestPostalCodeImport();
     TestImeDictionaryImport();
     TestEnglishWritingRules();

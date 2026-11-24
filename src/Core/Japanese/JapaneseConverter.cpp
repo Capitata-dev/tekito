@@ -733,11 +733,29 @@ struct Searched {
     std::vector<int> path;
     std::int64_t cost{kInfinity};
 };
+
+// The most PairBonus and CompoundBonus can take off a link in `lattice`: a
+// link that costs this much more than the best so far without them is no
+// better with them, and they are not worked out for it.
+std::int64_t MostBonus(const Lattice& lattice, const LanguageModel* model, const JapaneseConverter::ModelWeights& weights) {
+    std::int64_t most = 0;
+    if (model) {
+        most = std::max({most, std::llround(kPmiCeiling * static_cast<double>(weights.costPerNat)),
+                         std::llround(kPmiFloor * static_cast<double>(weights.penaltyPerNat))});
+    }
+    if (lattice.compoundCost > 0) {
+        std::uint32_t count = 0;
+        for (const auto& node : lattice.nodes) count = std::max({count, node.compoundEnds, node.compoundStarts});
+        if (count > 0) most += std::llround(std::log1p(static_cast<double>(count)) * static_cast<double>(lattice.compoundCost));
+    }
+    return most;
+}
 Searched SearchPath(const Lattice& lattice, std::size_t n, std::uint16_t context, const ConnectionMatrix& matrix,
                     const LanguageModel* model, const JapaneseConverter::ModelWeights& weights) {
     const auto& nodes = lattice.nodes;
     std::vector<std::int64_t> best(nodes.size(), kInfinity);
     std::vector<int> previous(nodes.size(), -1);
+    const std::int64_t mostBonus = MostBonus(lattice, model, weights);
     for (std::size_t i = 0; i < n; ++i) {
         for (const int k : lattice.beginningAt[i]) {
             const Node& node = nodes[k];
@@ -747,8 +765,9 @@ Searched SearchPath(const Lattice& lattice, std::size_t n, std::uint16_t context
             }
             for (const int p : lattice.endingAt[i]) {
                 if (best[p] >= kInfinity) continue;
-                const std::int64_t cost = best[p] + matrix.Cost(nodes[p].right, node.left) + node.cost -
-                                          PairBonus(model, weights, nodes[p], node) - CompoundBonus(lattice, nodes[p], node);
+                const std::int64_t plain = best[p] + matrix.Cost(nodes[p].right, node.left) + node.cost;
+                if (plain - mostBonus >= best[k]) continue;
+                const std::int64_t cost = plain - PairBonus(model, weights, nodes[p], node) - CompoundBonus(lattice, nodes[p], node);
                 if (cost < best[k]) {
                     best[k] = cost;
                     previous[k] = p;

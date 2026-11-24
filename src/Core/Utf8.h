@@ -11,6 +11,7 @@
 namespace tekito::utf8 {
 
 inline void AppendCodePoint(std::wstring& out, char32_t c) {
+    if (c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) c = 0xFFFD;  // not a character
     if constexpr (sizeof(wchar_t) == 2) {
         if (c >= 0x10000) {
             c -= 0x10000;
@@ -96,7 +97,7 @@ inline std::string Encode(std::wstring_view text) {
                 }
             }
         }
-        if (c >= 0xD800 && c <= 0xDFFF) c = 0xFFFD;  // a lone surrogate
+        if ((c >= 0xD800 && c <= 0xDFFF) || c > 0x10FFFF) c = 0xFFFD;  // a lone surrogate, or past Unicode
         if (c < 0x80) {
             out.push_back(static_cast<char>(c));
         } else if (c < 0x800) {
@@ -121,7 +122,8 @@ inline std::string Encode(std::wstring_view text) {
 template <typename F>
 inline void ForEachUtf16(std::wstring_view text, F&& unit) {
     for (const wchar_t w : text) {
-        const auto c = static_cast<char32_t>(w);
+        auto c = static_cast<char32_t>(w);
+        if (c > 0x10FFFF) c = 0xFFFD;  // past Unicode
         if (sizeof(wchar_t) == 4 && c >= 0x10000) {
             unit(static_cast<std::uint16_t>(0xD800 + ((c - 0x10000) >> 10)));
             unit(static_cast<std::uint16_t>(0xDC00 + ((c - 0x10000) & 0x3FF)));

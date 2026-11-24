@@ -44,6 +44,8 @@ bool AutoApplyPolicy::IsSafeAutomaticCandidate(std::wstring_view rawText,
     if ((candidate.policyFlags & (CandidatePolicyProtect | CandidatePolicySuggestOnly)) != 0) {
         return false;
     }
+    // Slang is offered, never put in by itself.
+    if (candidate.label == SemanticLabel::Slang) return false;
     if ((candidate.policyFlags & CandidatePolicyNormalize) != 0) {
         return true;
     }

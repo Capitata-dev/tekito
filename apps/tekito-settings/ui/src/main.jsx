@@ -8,7 +8,7 @@ import { CapitataLogo } from "./CapitataLogo.jsx";
 import { hostRequest, onHostStateChanged } from "./host.js";
 import { messages, resolveLanguage, TextContext, useText } from "./i18n.js";
 import {
-  Button, Card, Details, Dialog, Heading, IconButton, Keycaps, LinkRow, ModeIcon, Radios, Row, Segmented, Symbol, TextBox, Toggle, Wordmark, TekitoSymbol,
+  Button, Card, Details, Dialog, Heading, IconButton, LinkRow, Radios, Row, Segmented, Symbol, TextBox, Toggle, Wordmark, TekitoSymbol,
   LineWordmark,
 } from "./ui.jsx";
 import { brandVariables, hueColor, tekitoTheme } from "./theme.js";
@@ -22,7 +22,7 @@ import "./styles.css";
 const pageIds = [...navPages, ...footPages];
 // Pages opened from elsewhere (the list, or the setup's --page) that are
 // not in the list.
-const subPages = ["samples", "romaji"];
+const subPages = ["romaji"];
 // Links from before the pages were rearranged.
 const pageAliases = {
   japanese: "conversion", mixed: "conversion", ai: "conversion", auto: "slips", switching: "general", english: "slips",
@@ -45,7 +45,6 @@ const initialSettings = {
   socialPersonalization: 1,
   candidateWindowStyle: 0,
   candidateRows: 0,
-  aiSettingsControl: 1,
   mixPunctuation: 0,
   mixDigitWidth: 0,
   mixNumberStyle: 1,
@@ -136,6 +135,7 @@ const initialSettings = {
   japaneseEnglishSpacing: false,
   japaneseIgnoreCapsLock: true,
   japaneseNumpadDirect: true,
+  japaneseCasedWords: true,
   dateConversion: true,
   numberConversion: true,
   symbolConversion: true,
@@ -149,9 +149,6 @@ function pageFromHash() {
   const id = window.location.hash.slice(1);
   return pageAliases[id] || (pageIds.includes(id) || subPages.includes(id) ? id : "home");
 }
-
-// The AI model files by japaneseSentenceModel.
-const aiModelKeys = ["", "light", "strong"];
 
 function App() {
   const [page, setPage] = useState(pageFromHash);
@@ -205,8 +202,6 @@ function App() {
       // Remembering is a convenience only.
     }
   };
-  // Home's conversation with AI, kept while Settings is open.
-  const [conversation, setConversation] = useState([]);
 
   const t = messages[resolveLanguage(settings.uiLanguage, appearance.systemLanguage)];
   const japaneseInstalled = Boolean(runtime.japanese);
@@ -355,6 +350,17 @@ function App() {
   // into view and marked for a moment.
   const [visit, setVisit] = useState(0);
   const [focusRow, setFocusRow] = useState(null);
+  // "--page" again while Settings is open (the desktop companion's menu):
+  // the host changes the hash, and that page opens.
+  useEffect(() => {
+    const go = () => {
+      setPage(pageFromHash());
+      setVisit((n) => n + 1);
+      setFocusRow(null);
+    };
+    window.addEventListener("hashchange", go);
+    return () => window.removeEventListener("hashchange", go);
+  }, []);
   const open = (id, rowId, details) => {
     if (details) {
       try {
@@ -393,19 +399,12 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // AI answers Home's box once a model is chosen and there.
-  // Home asks AI once Settings' AI model is there; with a conversion model
-  // and not it, Home offers to download it.
-  const chosenModel = settings.japaneseSentenceModel || 0;
-  const conversionAi = chosenModel > 0 && Boolean(aiModels[aiModelKeys[chosenModel]]?.installed) && Boolean(aiModels.runtime?.installed);
-  const aiReady = Boolean(aiModels.settings?.installed) && Boolean(aiModels.runtime?.installed);
-  const settingsAiOffer = conversionAi && !aiReady;
   const on = { japanese, mixed, auto: true, direct: true };
   const japaneseKeyboard = Boolean(runtime.japaneseKeyboard);
   const ctx = {
     t, settings, setSetting, runAction, setConfirm, showKeys: setKeys, open, on, multi: japanese || mixed, japaneseInstalled,
     windowsInput: { ctrlShift: runtime.ctrlShiftSwitches !== false, tekitoDefault: Boolean(runtime.tekitoDefault), defaultSaved: Boolean(runtime.defaultSaved) },
-    japaneseKeyboard, aiModels, postalCodes, openRomaji: () => open("romaji"), aiReady, settingsAiOffer, chat: { messages: conversation, setMessages: setConversation },
+    japaneseKeyboard, aiModels, postalCodes, openRomaji: () => open("romaji"),
     japaneseInstalling: Boolean(runtime.japaneseInstalling), japaneseDataBytes: runtime.japaneseDataBytes || 0,
     japaneseAddable: runtime.japaneseAddable !== false, japaneseDataError: runtime.japaneseDataError || "",
     encryption,
@@ -445,12 +444,11 @@ function App() {
               </Card>
             ) : (
               <>
-                {current === "home" && <HomePage ctx={ctx} aiReady={aiReady} />}
+                {current === "home" && <HomePage ctx={ctx} />}
                 {pageGroups[current] && <CatalogPage page={current} ctx={ctx} />}
                 {current === "all" && <AllSettingsPage ctx={ctx} defaults={initialSettings} />}
                 {current === "dictionary" && <DictionaryPage {...pageProps} japanese={japaneseInstalled} learning={learning} encryption={encryption}
                   dictionary={dictionary} japaneseWords={japaneseWords} setModal={setModal} />}
-                {current === "samples" && <SamplesPage japaneseInstalled={japaneseInstalled} back={() => open("home")} />}
                 {current === "romaji" && <RomajiTable romaji={romaji} runAction={runAction} setConfirm={setConfirm} back={() => open("keys")} />}
                 {current === "about" && <AboutPage {...pageProps} version={version} runtime={runtime} packs={packs} japanese={japaneseInstalled} />}
               </>
@@ -509,63 +507,6 @@ for (const name of ["dragover", "drop"]) window.addEventListener(name, (event) =
 
 // ---------------------------------------------------------------------------
 // 日本語
-
-// 入力の見本: short clips of what each mode does (public/samples, recorded
-// by tests/visual/samples/encode.py), one playing at a time.
-const sampleSets = {
-  japanese: [
-    ["japanese-convert", ["Space", "Enter"]], ["japanese-convert-long", ["Space"]], ["japanese-live", []],
-    ["japanese-phrases", ["Space", "↑"]], ["japanese-prediction", ["Tab"]], ["japanese-english", ["Shift"]],
-    ["japanese-forms", ["F6", "F7", "F8", "F10"]], ["japanese-special", ["Space"]], ["japanese-undo", ["Ctrl", "Backspace"]],
-    ["japanese-slips", ["Space"]],
-  ],
-  mixed: [["mixed-basic", ["Space"]], ["mixed-long", ["Space"]], ["mixed-live", []], ["mixed-vowel", ["Space"]], ["mixed-correction", ["Space"]]],
-  auto: [
-    ["auto-correct", ["Space"]], ["auto-undo", ["Backspace", "Esc"]], ["auto-completion", ["Tab"]], ["auto-next", ["Tab"]],
-    ["auto-casual", []], ["auto-period", ["Enter"]],
-  ],
-};
-
-function SamplesPage({ japaneseInstalled, back }) {
-  const t = useText();
-  const modes = japaneseInstalled ? ["japanese", "mixed", "auto"] : ["auto"];
-  const [mode, setMode] = useState(modes[0]);
-  const [shown, setShown] = useState(null);
-  const theme = window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  const clip = (id) => `./samples/${id}-${theme}.mp4`;
-  return (
-    <>
-      <Button icon="chevron_left" variant="quiet" className="back" onClick={back}>{t.pages.home}</Button>
-      <div className="sample-tabs" role="tablist" aria-label={t.pages.samples}>
-        {modes.map((id) => (
-          <button key={id} type="button" role="tab" aria-selected={mode === id} className="sample-tab" onClick={() => setMode(id)}>
-            <ModeIcon id={id} size={18} />{t.modeNames[id]}
-          </button>
-        ))}
-      </div>
-      <div className="samples" role="tabpanel">
-        {sampleSets[mode].map(([id, keys]) => (
-          <button key={id} type="button" className="sample" onClick={() => setShown([id, keys])}>
-            <span className="sample-stage">
-              {/* The clip's last frame; the clip plays once opened. */}
-              <img src={clip(id).replace(".mp4", ".jpg")} alt="" />
-              <span className="sample-play" aria-hidden="true"><Symbol name="play_arrow" size={22} /></span>
-            </span>
-            <span className="sample-name"><span>{t.samples.names[id]}</span><Keycaps keys={keys} /></span>
-          </button>
-        ))}
-      </div>
-      <Dialog open={Boolean(shown)} title={shown ? t.samples.names[shown[0]] : ""} wide onClose={() => setShown(null)}>
-        {shown && (
-          <div className="sample-player">
-            <video key={shown[0]} src={clip(shown[0])} muted loop playsInline autoPlay />
-          </div>
-        )}
-        <div className="dialog-actions"><Button variant="primary" onClick={() => setShown(null)}>{t.close}</Button></div>
-      </Dialog>
-    </>
-  );
-}
 
 function RomajiTable({ romaji, runAction, setConfirm, back }) {
   const t = useText();
@@ -987,7 +928,7 @@ function AboutPage({ settings, setSetting, runAction, version, runtime, packs, j
       <Card label={a.publisher}>
         <div className="publisher"><CapitataLogo className="capitata" /></div>
         <LinkRow icon="language" title="capitata.dev" external onClick={() => runAction("website.open", {})} />
-        <LinkRow icon="code" title="GitHub" description="github.com/Canta360/tekito" external onClick={() => runAction("feedback.open", { kind: "github" })} />
+        <LinkRow icon="code" title="GitHub" description="github.com/Capitata-dev/tekito" external onClick={() => runAction("feedback.open", { kind: "github" })} />
       </Card>
       <div className="footnote"><span>© 2026 Capitata</span></div>
 

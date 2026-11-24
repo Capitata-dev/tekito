@@ -154,13 +154,21 @@ bool WriteKeyFile(const std::filesystem::path& path, const KeyFile& file) {
     // Written beside it, then put in place, so a failure leaves the old one.
     auto temporary = path;
     temporary += L".new-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetCurrentThreadId());
-    {
-        std::ofstream file_(temporary, std::ios::binary | std::ios::trunc);
-        const auto text = out.str();
-        file_.write(text.data(), static_cast<std::streamsize>(text.size()));
-        if (!file_) return false;
+    // Every byte written and on the disk, the file closed, before it takes
+    // the place of the only key there is; anything less, and it is removed.
+    const auto text = out.str();
+    const HANDLE handle = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    const bool wrote = WriteFile(handle, text.data(), static_cast<DWORD>(text.size()), &written, nullptr) &&
+                       written == text.size() && FlushFileBuffers(handle);
+    const bool closed = CloseHandle(handle) != FALSE;
+    if (!wrote || !closed ||
+        !MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileW(temporary.c_str());
+        return false;
     }
-    return MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+    return true;
 }
 
 std::optional<Bytes> SystemWrap(const DataKey& key) {
@@ -228,7 +236,12 @@ std::string NormalizeCode(std::string_view code) {
 
 // The key that wraps the data key, from the code (Argon2id).
 std::optional<DataKey> CodeKey(const std::string& code, const KeyFile& file) {
-    if (file.blocks < 8 || file.blocks > (1u << 20) || file.passes < 1 || file.passes > 16) return std::nullopt;
+    // The cost TEKITO writes, or up to four times it: the key file is not
+    // trusted to make the work much cheaper, or long enough to stall.
+    if (file.blocks < kArgonBlocks || file.blocks > 4 * kArgonBlocks || file.passes < kArgonPasses ||
+        file.passes > 2 * kArgonPasses) {
+        return std::nullopt;
+    }
     std::unique_ptr<std::uint8_t[]> work(new (std::nothrow) std::uint8_t[static_cast<std::size_t>(file.blocks) * 1024]);
     if (!work) return std::nullopt;
     DataKey key{};
@@ -372,6 +385,15 @@ std::string JournalMode(sqlite3* connection, const char* pragma) {
 
 }  // namespace
 
+DatabaseOpening::DatabaseOpening() {
+    auto* lock = new (std::nothrow) std::optional<KeyFileLock>();
+    if (!lock) return;
+    lock->emplace(kOpenWait);
+    lock_ = lock;
+}
+
+DatabaseOpening::~DatabaseOpening() { delete static_cast<std::optional<KeyFileLock>*>(lock_); }
+
 std::filesystem::path UserKeyPath(const std::filesystem::path& database) {
     auto path = database;
     return path.replace_extension(L".key");
@@ -431,7 +453,8 @@ bool DisableEncryption(const std::filesystem::path& database) {
     if (!lock.Held()) return false;
     const auto path = UserKeyPath(database);
     auto file = ReadKeyFile(path);
-    if (!file) return true;
+    // No key file: done only when there is nothing encrypted to undo.
+    if (!file) return !DatabaseEncrypted(database);
     file->encrypt = false;
     if (!WriteKeyFile(path, *file)) return false;
     SettleEncryption(database);
@@ -560,7 +583,9 @@ bool UnlockDatabase(sqlite3* connection, const std::filesystem::path& database) 
     try {
         const auto file = ReadKeyFile(UserKeyPath(database));
         if (!file) return false;
-        auto key = SystemUnwrap(*file);
+        // The key it opens with now: the system's, or the new one it was
+        // changed to before user.key took it in (a renewal that stopped).
+        auto key = CurrentKey(database, *file);
         if (!key) return false;
         const bool ok = KeyConnection(connection, *key);
         crypto_wipe(key->data(), key->size());
@@ -572,6 +597,19 @@ bool UnlockDatabase(sqlite3* connection, const std::filesystem::path& database) 
 
 bool RescueDatabase(const std::filesystem::path& database, const std::filesystem::path& keyFile,
                     std::string_view recoveryCode, const std::filesystem::path& plain) {
+    std::error_code error;
+    // What is written is never one of the files it is rescued from.
+    const auto same = [&](const std::filesystem::path& other) {
+        std::error_code ignored;
+        return std::filesystem::exists(plain, ignored) && std::filesystem::equivalent(plain, other, ignored);
+    };
+    {
+        auto wal = database;
+        wal += L"-wal";
+        auto shm = database;
+        shm += L"-shm";
+        if (plain.empty() || same(database) || same(keyFile) || same(wal) || same(shm)) return false;
+    }
     const auto file = ReadKeyFile(keyFile);
     if (!file) return false;
     auto key = CodeUnwrap(*file, recoveryCode);
@@ -579,19 +617,38 @@ bool RescueDatabase(const std::filesystem::path& database, const std::filesystem
     // Not changed to the code's key yet: the key it is still encrypted with.
     auto previous = UnlockPrevious(*file, *key);
     // Read from a copy (with its log), never the original.
-    std::error_code error;
     wchar_t folder[MAX_PATH]{};
     GetTempPathW(MAX_PATH, folder);
-    const auto copy = std::filesystem::path(folder) / (L"tekito-rescue-" + std::to_wstring(GetCurrentProcessId()) + L".db");
-    std::filesystem::copy_file(database, copy, std::filesystem::copy_options::overwrite_existing, error);
-    auto wal = database;
-    wal += L"-wal";
+    const auto copy = std::filesystem::path(folder) / (L"tekito-rescue-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+                                                       std::to_wstring(GetTickCount64()) + L".db");
     auto copyWal = copy;
     copyWal += L"-wal";
+    auto shm = copy;
+    shm += L"-shm";
+    // Written beside `plain` and put in its place only once it holds what
+    // could be read: a rescue that fails leaves an earlier one as it was.
+    auto written = plain;
+    written += L".rescuing";
+    const auto cleanUp = [&] {
+        std::error_code ignored;
+        std::filesystem::remove(copy, ignored);
+        std::filesystem::remove(copyWal, ignored);
+        std::filesystem::remove(shm, ignored);
+        std::filesystem::remove(written, ignored);
+    };
+    std::filesystem::copy_file(database, copy, std::filesystem::copy_options::overwrite_existing, error);
+    if (error) {
+        crypto_wipe(key->data(), key->size());
+        if (previous) crypto_wipe(previous->data(), previous->size());
+        cleanUp();
+        return false;
+    }
+    auto wal = database;
+    wal += L"-wal";
     if (std::filesystem::is_regular_file(wal, error)) {
         std::filesystem::copy_file(wal, copyWal, std::filesystem::copy_options::overwrite_existing, error);
     }
-    std::filesystem::remove(plain, error);
+    std::filesystem::remove(written, error);
     sqlite3* source = nullptr;
     sqlite3* target = nullptr;
     bool keyed = sqlite3_open16(copy.c_str(), &source) == SQLITE_OK && KeyConnection(source, *key);
@@ -600,46 +657,70 @@ bool RescueDatabase(const std::filesystem::path& database, const std::filesystem
         source = nullptr;
         keyed = sqlite3_open16(copy.c_str(), &source) == SQLITE_OK && KeyConnection(source, *previous);
     }
-    bool opened = keyed && sqlite3_open16(plain.c_str(), &target) == SQLITE_OK;
+    const bool opened = keyed && sqlite3_open16(written.c_str(), &target) == SQLITE_OK;
     crypto_wipe(key->data(), key->size());
     if (previous) crypto_wipe(previous->data(), previous->size());
+    // A table name inside double quotes, its own quotes doubled.
+    const auto quoted = [](const std::string& name) {
+        std::string out = "\"";
+        for (const char c : name) out += c == '"' ? std::string("\"\"") : std::string(1, c);
+        return out + "\"";
+    };
+    int copied = 0;
+    bool listed = false;
     if (opened) {
         // Each table: its schema, then its rows, as many as can be read.
         sqlite3_stmt* tables = nullptr;
-        sqlite3_prepare_v2(source, "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';",
-                           -1, &tables, nullptr);
-        while (tables && sqlite3_step(tables) == SQLITE_ROW) {
-            const std::string name = reinterpret_cast<const char*>(sqlite3_column_text(tables, 0));
+        listed = sqlite3_prepare_v2(source,
+                                    "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';",
+                                    -1, &tables, nullptr) == SQLITE_OK &&
+                 tables;
+        while (listed && sqlite3_step(tables) == SQLITE_ROW) {
+            const auto* nameText = reinterpret_cast<const char*>(sqlite3_column_text(tables, 0));
             const auto* sql = reinterpret_cast<const char*>(sqlite3_column_text(tables, 1));
-            if (!sql || sqlite3_exec(target, sql, nullptr, nullptr, nullptr) != SQLITE_OK) continue;
+            if (!nameText || !sql) continue;
+            const std::string name = nameText;
+            // One CREATE TABLE statement, run as a statement of its own.
+            sqlite3_stmt* create = nullptr;
+            const char* rest = nullptr;
+            const bool made = sqlite3_prepare_v2(target, sql, -1, &create, &rest) == SQLITE_OK && create &&
+                              (!rest || *rest == '\0') && sqlite3_step(create) == SQLITE_DONE;
+            sqlite3_finalize(create);
+            if (!made) continue;
             sqlite3_stmt* rows = nullptr;
-            if (sqlite3_prepare_v2(source, ("SELECT * FROM \"" + name + "\";").c_str(), -1, &rows, nullptr) != SQLITE_OK) continue;
+            if (sqlite3_prepare_v2(source, ("SELECT * FROM " + quoted(name) + ";").c_str(), -1, &rows, nullptr) != SQLITE_OK) {
+                sqlite3_finalize(rows);
+                continue;
+            }
             const int columns = sqlite3_column_count(rows);
-            std::string insert = "INSERT OR IGNORE INTO \"" + name + "\" VALUES (";
+            std::string insert = "INSERT OR IGNORE INTO " + quoted(name) + " VALUES (";
             for (int c = 0; c < columns; ++c) insert += c ? ",?" : "?";
             insert += ");";
             sqlite3_stmt* put = nullptr;
-            sqlite3_prepare_v2(target, insert.c_str(), -1, &put, nullptr);
-            sqlite3_exec(target, "BEGIN;", nullptr, nullptr, nullptr);
-            while (put && sqlite3_step(rows) == SQLITE_ROW) {
-                for (int c = 0; c < columns; ++c) sqlite3_bind_value(put, c + 1, sqlite3_column_value(rows, c));
-                sqlite3_step(put);
-                sqlite3_reset(put);
+            if (sqlite3_prepare_v2(target, insert.c_str(), -1, &put, nullptr) == SQLITE_OK && put &&
+                sqlite3_exec(target, "BEGIN;", nullptr, nullptr, nullptr) == SQLITE_OK) {
+                while (sqlite3_step(rows) == SQLITE_ROW) {
+                    for (int c = 0; c < columns; ++c) sqlite3_bind_value(put, c + 1, sqlite3_column_value(rows, c));
+                    (void)sqlite3_step(put);
+                    sqlite3_reset(put);
+                }
+                if (sqlite3_exec(target, "COMMIT;", nullptr, nullptr, nullptr) == SQLITE_OK) {
+                    ++copied;
+                } else {
+                    (void)sqlite3_exec(target, "ROLLBACK;", nullptr, nullptr, nullptr);
+                }
             }
-            sqlite3_exec(target, "COMMIT;", nullptr, nullptr, nullptr);
             sqlite3_finalize(put);
             sqlite3_finalize(rows);
         }
         sqlite3_finalize(tables);
     }
     if (source) sqlite3_close(source);
-    if (target) sqlite3_close(target);
-    std::filesystem::remove(copy, error);
-    std::filesystem::remove(copyWal, error);
-    auto shm = copy;
-    shm += L"-shm";
-    std::filesystem::remove(shm, error);
-    return opened;
+    const bool closed = !target || sqlite3_close(target) == SQLITE_OK;
+    // Something was read: it takes the place of `plain`.
+    bool done = opened && listed && copied > 0 && closed &&
+                MoveFileExW(written.c_str(), plain.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    cleanUp();
+    return done;
 }
-
 }  // namespace tekito::userdata

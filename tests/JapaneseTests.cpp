@@ -629,6 +629,183 @@ void TestComposerConversion(const RomajiTable& table, const MiniPack& pack) {
     Require(!composer.IsConverted(), "typing after a conversion starts typing again");
 }
 
+// Rows the same but for width take its tag; the usual kana forms none.
+void TestWidthMarks() {
+    using Row = tekito::japanese::CandidateList::Row;
+    using Width = Row::Width;
+    std::vector<Row> rows;
+    for (const wchar_t* text : {L"公園", L"KOUEN", L"\xFF2B\xFF2F\xFF35\xFF25\xFF2E", L"\xFF7A\xFF73\xFF74\xFF9D",
+                                L"\x30B3\x30A6\x30A8\x30F3", L"\x3053\x3046\x3048\x3093", L"Kouen"}) {
+        Row row;
+        row.text = text;
+        rows.push_back(std::move(row));
+    }
+    tekito::japanese::MarkWidths(rows);
+    Require(rows[0].width == Width::None, "a word with no twin takes no tag");
+    Require(rows[1].width == Width::Half && rows[2].width == Width::Full, "KOUEN and its full-width twin");
+    Require(rows[3].width == Width::Half, "half-width katakana beside its usual form");
+    Require(rows[4].width == Width::None && rows[5].width == Width::None, "katakana and hiragana as usually written");
+    Require(rows[6].width == Width::None, "another case is no twin");
+}
+
+// Commit at punctuation: the text before the mark commits, the mark stays
+// for its other forms, and goes on with the next key.
+void TestMarkLeft(const RomajiTable& table, const MiniPack& pack) {
+    using tekito::japanese::KeyCommand;
+    using tekito::japanese::KeyPress;
+    using Action = KeyCommand::Action;
+    using Key = KeyPress::Key;
+    const tekito::japanese::JapaneseConverter converter(pack.dictionary, pack.matrix);
+    JapaneseComposer composer(&table);
+    composer.SetConverter(&converter);
+    composer.SetCommitAtPunctuation(true);
+    const tekito::japanese::KeyOptions options;
+    const auto press = [](Key key) {
+        KeyPress p;
+        p.key = key;
+        return p;
+    };
+    const auto type = [](wchar_t character) {
+        KeyPress p;
+        p.key = Key::Character;
+        p.character = character;
+        return p;
+    };
+    std::wstring committed;
+    const auto hit = [&](const KeyPress& key) -> std::optional<KeyCommand> {
+        const auto command = tekito::japanese::TranslateKey(composer, key, options);
+        if (!command) return command;
+        const auto outcome = tekito::japanese::ApplyKey(composer, *command);
+        if (outcome.committed) committed += *outcome.committed;
+        return command;
+    };
+    const auto typeAll = [&](std::wstring_view keys) {
+        for (const wchar_t key : keys) hit(type(key));
+    };
+
+    typeAll(L"watashinonamaehanakanodesu.");
+    RequireText(committed, L"私の名前は中野です", "the text before the mark commits");
+    Require(composer.MarkLeftUntouched(), "the mark stays");
+    RequireText(SegmentsText(composer), L"*。", "converted on its own");
+    typeAll(L"a");
+    RequireText(committed, L"私の名前は中野です。", "the next key commits it first");
+    RequireText(composer.Preedit(), L"あ", "and types on");
+    Require(hit(press(Key::Escape)) && !composer.IsComposing(), "Esc drops what was typed");
+
+    committed.clear();
+    typeAll(L"nakano.");
+    const auto enter = hit(press(Key::Enter));
+    Require(enter && enter->action == Action::Commit && enter->letKeyThrough && !composer.IsComposing(),
+            "Enter commits the mark and goes on to the application");
+    Require(committed.size() > 1 && committed.back() == L'\x3002', "with the mark");
+
+    committed.clear();
+    typeAll(L"nakano.");
+    const auto left = hit(press(Key::Left));
+    Require(left && left->letKeyThrough && !composer.IsComposing(), "so do the arrows");
+
+    committed.clear();
+    typeAll(L"nakano.");
+    Require(hit(press(Key::Backspace)) && !composer.IsComposing(), "Backspace drops the mark in one press");
+    Require(!committed.empty() && committed.back() != L'\x3002', "the text before it stays committed");
+
+    committed.clear();
+    typeAll(L"nakano.");
+    hit(press(Key::Space));
+    Require(composer.IsComposing() && !composer.MarkLeftUntouched(), "Space goes into the mark's forms");
+
+    composer.Clear();
+    composer.SetLiveConversion(true);
+    committed.clear();
+    typeAll(L"nakano.");
+    Require(composer.MarkLeftUntouched() && !committed.empty() && committed.back() != L'\x3002',
+            "with live conversion the mark stays too");
+    typeAll(L"a");
+    Require(!committed.empty() && committed.back() == L'\x3002', "and goes before what is typed next");
+}
+
+// The list's pages: the first in one column, numbered; the pages after it
+// in columns, down then across, with the keys going by them.
+void TestListColumns(const RomajiTable& table, const MiniPack& pack) {
+    using tekito::japanese::KeyPress;
+    using tekito::japanese::ListPageOf;
+    using Key = KeyPress::Key;
+    const auto first = ListPageOf(3, 50, 12);
+    Require(first.start == 0 && first.count == 12 && !first.columns, "the first page: twelve in one column");
+    const auto second = ListPageOf(12, 50, 12);
+    Require(second.start == 12 && second.count == 36 && second.columns, "the second: three columns of twelve");
+    const auto third = ListPageOf(48, 50, 12);
+    Require(third.start == 48 && third.count == 2 && third.columns, "the third: what is left");
+
+    const tekito::japanese::JapaneseConverter converter(pack.dictionary, pack.matrix);
+    JapaneseComposer composer(&table);
+    composer.SetConverter(&converter);
+    tekito::japanese::KeyOptions options;
+    options.pageSize = 2;
+    const auto press = [](Key key, bool shift = false) {
+        KeyPress p;
+        p.key = key;
+        p.shift = shift;
+        return p;
+    };
+    const auto hit = [&](const KeyPress& key) {
+        const auto command = tekito::japanese::TranslateKey(composer, key, options);
+        if (!command) return false;
+        (void)tekito::japanese::ApplyKey(composer, *command);
+        return true;
+    };
+    for (const wchar_t key : std::wstring_view(L"nakano")) {
+        KeyPress p;
+        p.key = Key::Character;
+        p.character = key;
+        hit(p);
+    }
+    hit(press(Key::Space));
+    hit(press(Key::Space));
+    const auto* candidates = composer.FocusedCandidates();
+    Require(composer.IsCandidateListOpen() && candidates && candidates->size() >= 5, "なかの has a long list");
+    const std::size_t size = candidates->size();
+    Require(hit(press(Key::Tab)) && composer.FocusedSelection() == 2, "Tab goes into the columns");
+    auto list = tekito::japanese::CandidateListFor(composer, options.pageSize);
+    Require(list.pageStart == 2 && list.columnRows == 2 && list.count == std::min<std::size_t>(6, size - 2) &&
+                list.rows[2].number == 0 && list.rows[0].number == 1,
+            "the columns unnumbered, the first page numbered");
+    Require(hit(press(Key::Right)) && composer.FocusedSelection() == 4, "Right goes a column across");
+    Require(hit(press(Key::Left)) && composer.FocusedSelection() == 2, "Left a column back");
+    Require(hit(press(Key::Left)) && composer.FocusedSelection() == 0, "and from the first column, the first page");
+    Require(hit(press(Key::Left)) && composer.IsCandidateListOpen() && composer.FocusedSelection() == 0,
+            "Left on the first page stays in the list");
+    Require(hit(press(Key::Down)) && hit(press(Key::Right)) && composer.IsCandidateListOpen() &&
+                composer.FocusedSelection() == 3,
+            "Right from the first page: the first column, the same row");
+    Require(hit(press(Key::Left)) && hit(press(Key::Up)) && composer.FocusedSelection() == 0, "and back");
+    KeyPress digit;
+    digit.key = Key::Character;
+    digit.character = L'2';
+    digit.digit = 2;
+    Require(hit(press(Key::Tab)) && composer.FocusedSelection() == 2, "Tab again");
+    Require(hit(press(Key::Tab, true)) && composer.FocusedSelection() == 0, "Shift+Tab back to the top");
+    Require(hit(press(Key::PageDown)) && composer.FocusedSelection() == 2, "PageDown: the columns");
+    Require(hit(press(Key::PageUp)) && composer.FocusedSelection() == 0, "PageUp: the first page");
+    Require(hit(press(Key::Down)) && hit(press(Key::Down)) && composer.FocusedSelection() == 2,
+            "Down from the first page's last row goes on into the columns");
+    Require(hit(digit) && composer.IsCandidateListOpen() && composer.FocusedSelection() == 2,
+            "a digit in the columns stays with the list");
+    Require(hit(press(Key::Up)) && composer.FocusedSelection() == 1, "Up from the columns' top: the first page");
+    // The ends of the list go round, as Space does, and the text stays.
+    Require(hit(press(Key::End)) && composer.IsCandidateListOpen() && composer.FocusedSelection() == size - 1,
+            "End: the last candidate");
+    Require(hit(press(Key::Right)) && composer.IsCandidateListOpen() && composer.FocusedSelection() == 0,
+            "Right with no column on the right: round to the first page, not down the column");
+    Require(hit(press(Key::Home)) && composer.IsCandidateListOpen() && composer.FocusedSelection() == 0,
+            "Home: the first candidate");
+    const auto lastPage = tekito::japanese::ListPageOf(size - 1, size, options.pageSize);
+    Require(hit(press(Key::PageUp)) && composer.IsCandidateListOpen() && composer.FocusedSelection() == lastPage.start,
+            "PageUp from the first page: the last page");
+    Require(hit(press(Key::PageDown)) && composer.IsCandidateListOpen() && composer.FocusedSelection() == 0,
+            "PageDown from the last page: the first");
+}
+
 // What each key does in Japanese mode (JapaneseKeys.h), as the text service
 // and the testbed carry it out.
 void TestKeys(const RomajiTable& table, const MiniPack& pack) {
@@ -1051,6 +1228,22 @@ void TestCapitals(const RomajiTable& table, const MiniPack& pack) {
     composer.Clear();
     RequireText(Type(composer, L"kA"), L"ｋA", "a pending key settles before the capital");
     composer.Clear();
+    // A word written with a small letter first, typed as it is written.
+    composer.SetWrittenAs([](std::wstring_view lower) -> std::optional<std::wstring> {
+        if (lower == L"iphone") return std::wstring(L"iPhone");
+        if (lower == L"macos") return std::wstring(L"macOS");
+        return std::nullopt;
+    });
+    composer.SetCasedWords(true);
+    RequireText(Type(composer, L"iPhone"), L"iPhone", "iPhone stays as typed, its i too");
+    RequireText(composer.Commit(), L"iPhone", "and commits so");
+    RequireText(Type(composer, L"macOS"), L"macOS", "the small letters before the capital, pending ones too");
+    composer.Clear();
+    RequireText(Type(composer, L"iiPC"), L"いいPC", "not when the keys spell no such word");
+    composer.Clear();
+    composer.SetCasedWords(false);
+    RequireText(Type(composer, L"iPhone"), L"いPhone", "off: as other input methods type it");
+    composer.Clear();
     composer.SetLiveConversion(true);
     RequireText(Type(composer, L"Google"), L"Google", "live conversion shows them as typed");
     RequireText(composer.Commit(), L"Google", "and commits them");
@@ -1330,14 +1523,32 @@ void TestMixedTyping(const RomajiTable& table, const MiniPack& pack) {
     Require(converted.front().english && !converted.back().english, "the English phrase is marked English, its space not");
     Type(composer, L"kikai");
     const auto held = composer.Segments();
-    Require(held.size() == 2 && held.front().settled && held.front().text == L"Push ",
+    Require(held.size() == 2 && held.front().settled && held.front().text == L"Push",
             "Mix holds the chunks before the one typed until Enter");
+    RequireText(held.back().text, L"きかい",
+                "keys that read clearly as Japanese show as Japanese after English, with no space before them");
     Require(held.front().english && !held.back().english, "the held English chunk is English, the kana typed after it not");
     composer.Convert();
     const auto sentence = composer.Commit();
     Require(sentence.starts_with(L"push") && sentence.size() > 4 && sentence[4] >= 0x3000,
             "Enter commits the whole sentence, Japanese right after English, which starts a Japanese "
             "sentence in small letters (pushきかい, not Push)");
+    // English typed with capitals, then Japanese without a space.
+    Type(composer, L"NHKnonyu-su");
+    {
+        const auto split = composer.Segments();
+        Require(split.size() == 2 && split.front().settled && split.front().text == L"NHK" &&
+                    split.back().text.starts_with(L"の"),
+                "two capitals, then a syllable: the English a chunk of its own, the kana typed after it the next");
+    }
+    composer.Clear();
+    Type(composer, L"APIs");
+    {
+        std::wstring shown;
+        for (const auto& segment : composer.Segments()) shown += segment.text;
+        RequireText(shown, L"APIs", "letters that make no syllable stay with the English");
+    }
+    composer.Clear();
     {
         // Mix AI: on Enter, a model trained for conversion chooses among the
         // sentence's texts, reading the keys and only what came before it.
@@ -2037,6 +2248,25 @@ void TestComposerLearning(const RomajiTable& table, const MiniPack& pack) {
 
 void TestKanjiSets() {
     using tekito::japanese::KanjiRange;
+    {
+        // A damaged line is passed over, never thrown at load time.
+        const auto file = std::filesystem::temp_directory_path() / L"tekito-kanji-sets-test.tsv";
+        {
+            std::ofstream out(file, std::ios::binary);
+            out << "\xE6\x9C\xAC\t1\r\n\xE9\xAC\xB1\tabc\n\xE6\xA1\x9C\t99999999999999999999\n";
+        }
+        tekito::japanese::KanjiSets loaded;
+        bool threw = false;
+        try {
+            Require(loaded.Load(file), "kanji sets load the good lines");
+        } catch (...) {
+            threw = true;
+        }
+        std::error_code ignored;
+        std::filesystem::remove(file, ignored);
+        Require(!threw && loaded.Allows(L"本", KanjiRange::Kyoiku) && !loaded.Allows(L"鬱", KanjiRange::Joyo),
+                "a level that is not a number is passed over, not thrown");
+    }
     tekito::japanese::KanjiSets sets;
     sets.Add(U'本', 1);  // 教育, 1年
     sets.Add(U'鬱', 8);  // 常用
@@ -2067,6 +2297,39 @@ void TestKanjiSets() {
     Require(sets.VariantForms(L"高崎", 2).size() == 2, "at most as many as asked");
     Require(sets.VariantForms(L"吉野", 6) == std::vector<std::wstring>{L"𠮷野"}, "variants outside the BMP");
     Require(sets.VariantForms(L"たかはし", 6).empty(), "kana has none");
+
+    // 旧字体 and the other variants (異体字), told apart for the list's tags.
+    using Kind = tekito::japanese::KanjiSets::VariantKind;
+    sets.Add(U'国', 2);
+    sets.Add(U'高', 2);
+    sets.Add(U'崎', 4);
+    sets.AddVariants(U'国', U"國圀");
+    sets.AddVariants(U'國', U"国");
+    sets.AddVariants(U'圀', U"国");
+    sets.AddVariants(U'髙', U"高");
+    sets.AddVariants(U'﨑', U"崎");
+    sets.AddOldForms(U'国', U"國");
+    sets.AddOldForms(U'桜', U"櫻");
+    const auto standard = [&](std::wstring_view text) {
+        const auto form = sets.StandardForm(text);
+        return form ? form->text + (form->kind == Kind::Old ? L":old" : L":other") : std::wstring(L"-");
+    };
+    RequireText(standard(L"國"), L"国:old", "國 is 国's old form");
+    RequireText(standard(L"櫻井"), L"桜井:old", "an old form that is 人名用 too");
+    RequireText(standard(L"圀"), L"国:other", "圀 is another variant");
+    RequireText(standard(L"髙﨑"), L"高崎:other", "髙 and 﨑 are other variants");
+    RequireText(standard(L"高崎"), L"-", "常用 kanji stay");
+
+    using Row = tekito::japanese::CandidateList::Row;
+    std::vector<Row> rows(4);
+    rows[0].text = L"国";
+    rows[1].text = L"國";
+    rows[2].text = L"圀";
+    rows[3].text = L"櫻";
+    tekito::japanese::MarkVariantForms(rows, &sets);
+    Require(!rows[0].oldForm && !rows[0].variantForm && rows[1].oldForm && rows[2].variantForm,
+            "the list tags 國 旧字体 and 圀 異体字 beside 国");
+    Require(!rows[3].oldForm && !rows[3].variantForm, "but not 櫻 with no 桜 in the list");
 }
 
 void TestMeanings() {
@@ -2086,6 +2349,18 @@ void TestMeanings() {
     RequireText(first(L"機械", L"きかい"), L"機械:仕事をする装置。", "WordNet fills in for Wiktionary");
     RequireText(first(L"はし", L"はし"), L"はし:川に渡した構築物。", "kana words are found as they are");
     RequireText(first(L"はしった", L"はしった"), L"-", "but kana is never cut into another word");
+    // Wiktionary's pointers to other entries are never shown as meanings.
+    RequireText(first(L"10代", L""), L"10代:年齢が十歳から十九歳までの間。", "a pointer is the entry it points to");
+    RequireText(first(L"お下がり", L""), L"お下がり:目上の人から譲られた使い古しの物。", "written without brackets too");
+    RequireText(first(L"あかぎ", L""), L"あかぎ:姓や地名のなのり。", "a last sentence that only points goes");
+    RequireText(first(L"ボタン", L""), L"ボタン:衣服の合わせ目に用いる留め具。", "whatever it names");
+    RequireText(first(L"ゲール語", L""), L"ゲール語:ケルト系の言語。", "and a pointer in brackets");
+    RequireText(first(L"おおたか", L""), L"おおたか:鳥の名", "an entry not there: what came before it");
+    RequireText(first(L"どら焼き", L""), L"-", "a pointer to nothing is no meaning");
+    RequireText(first(L"何故", L""), L"何故:どうして。なぜ。", "a row pointing to nothing gives way to the next row");
+    RequireText(first(L"盛り土", L""), L"盛り土:土を盛り上げること。", "each entry a pointer names, without its reading");
+    RequireText(first(L"かの", L""), L"かの:（すでに話題に出た事項を参照する）あの。その。",
+                "参照 in an explanation stays");
     const auto english = meanings.Lookup(L"Meeting");
     Require(english && english->senses.size() == 2 && english->senses[1] == L"the act of coming together",
             "English meanings are split into senses");
@@ -2272,6 +2547,22 @@ void TestSpecialConversions(const RomajiTable& table, const MiniPack& pack) {
     Require(composer.FocusedCandidates()->size() >= 2 && (*composer.FocusedCandidates())[1].text == L"1+2=3",
             "and to the arithmetic with the sum");
     composer.Clear();
+
+    // A time for いま with a particle after it, not in います.
+    {
+        const auto hasTime = [&](const wchar_t* keys) {
+            Type(composer, keys);
+            composer.Convert();
+            const auto* list = composer.FocusedCandidates();
+            const bool time = list && std::any_of(list->begin(), list->end(), [](const auto& c) {
+                return c.text.find(L':') != std::wstring::npos;
+            });
+            composer.Clear();
+            return time;
+        };
+        Require(hasTime(L"imaha"), "いまは offers the time");
+        Require(!hasTime(L"imasu") && !hasTime(L"imasuga"), "います offers none: いま is part of another word");
+    }
 
     Type(composer, L"1234");
     composer.Convert();
@@ -2989,6 +3280,9 @@ int main(int argc, char** argv) {
     TestConversion(*pack);
     TestComposerConversion(*table, *pack);
     TestKeys(*table, *pack);
+    TestListColumns(*table, *pack);
+    TestMarkLeft(*table, *pack);
+    TestWidthMarks();
     TestLiveConversion(*table, *pack);
     TestAddresses(*table, *pack);
     TestCapitals(*table, *pack);

@@ -61,8 +61,11 @@ double WeightedEditDistance(std::wstring_view left, std::wstring_view right) noe
         for (std::size_t j = 1; j <= right.size(); ++j) {
             const double substitution = left[i - 1] == right[j - 1] ? 0.0 : kSubstitutionCost;
             const double firstSubstitution = i == 1 && j == 1 && substitution > 0.0 ? substitution * kFirstLetterFactor : substitution;
+            // A letter typed twice (youu) or once where it is doubled (bok,
+            // mising) costs the same.
             const double extra = i > 1 && left[i - 1] == left[i - 2] ? kRepeatedKeyCost : kInsertDeleteCost;
-            current[j] = std::min({previous[j] + extra, current[j - 1] + kInsertDeleteCost,
+            const double missing = j > 1 && right[j - 1] == right[j - 2] ? kRepeatedKeyCost : kInsertDeleteCost;
+            current[j] = std::min({previous[j] + extra, current[j - 1] + missing,
                                    previous[j - 1] + firstSubstitution});
             if (i > 1 && j > 1 && left[i - 1] == right[j - 2] &&
                 left[i - 2] == right[j - 1]) {

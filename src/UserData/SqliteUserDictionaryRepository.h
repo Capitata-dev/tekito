@@ -46,6 +46,9 @@ private:
     // this repository opened the database.
     [[nodiscard]] std::int64_t EraseMark() const noexcept;
     [[nodiscard]] bool ErasedSince() const noexcept;
+    // BEGIN IMMEDIATE, unless the database was erased since it was opened
+    // (then nothing is begun): checked inside the transaction.
+    [[nodiscard]] bool BeginWrite() noexcept;
 
     std::filesystem::path databasePath_;
     sqlite3* database_{nullptr};

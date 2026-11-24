@@ -48,10 +48,6 @@ struct UserSettings {
     static constexpr int kMinCandidateRows = 3;
     static constexpr int kMaxCandidateRows = 20;
     int candidateRows{0};
-    // What AI may change when asked in Settings' Home: 0 = it only suggests
-    // (the user applies), 1 = it changes settings to the values Settings
-    // offers, 2 = also to any value in a setting's range.
-    int aiSettingsControl{1};
     // The candidate list shows what the highlighted word means, in a pane
     // beside it (the japanese-slang, japanese-wiktionary, japanese-wordnet
     // and dictionary-display packs).
@@ -207,6 +203,11 @@ struct UserSettings {
     // (KeyConverter / KanaSlips), then convert; the keys as typed stay a
     // choice. Off: convert as typed; slip readings stay in the list only.
     bool japaneseSlipAutoApply{true};
+    // Japanese mode: a word written with a small letter first and a capital
+    // inside (iPhone, macOS), typed so, as typed (not いPhone); and after a
+    // word with a capital in it as it is written (Zoom, GitHub), kana again
+    // (Zoomで).
+    bool japaneseCasedWords{true};
     // The symbol or emoji a reading names on the first page of its list
     // (まる: ○, わらい: 😂); off, with the other symbols at the end.
     bool japaneseFirstPageSymbol{true};
@@ -343,6 +344,39 @@ struct UserSettings {
     std::array<std::pair<InputMode, int>, 4> modes{};
     for (int i = 3; i >= 0; --i, order /= 10) modes[static_cast<std::size_t>(i)] = kModes[order % 10 - 1];
     return modes;
+}
+
+// `mode`, or the one that stands in for it when it is off here: Japanese
+// and Mix for each other, then Auto. `japaneseProfile`: TEKITO is the
+// Japanese keyboard (where Japanese and Mix can be modes at all).
+[[nodiscard]] inline InputMode AvailableMode(const UserSettings& settings, bool japaneseProfile, InputMode mode) noexcept {
+    const bool japanese = japaneseProfile && settings.japaneseEnabled;
+    const bool mixed = japaneseProfile && settings.mixedTypingEnabled;
+    if (mode == InputMode::Japanese && !japanese) return mixed ? InputMode::Mixed : InputMode::Convert;
+    if (mode == InputMode::Mixed && !mixed) return japanese ? InputMode::Japanese : InputMode::Convert;
+    return mode;
+}
+
+// The mode the switch key goes to from `current`: the next of the modes
+// chosen to go round (switchModes) that are on, in the order chosen
+// (switchOrder); with fewer than two, a typing mode and Auto. Without
+// Japanese typing, Auto and Direct.
+[[nodiscard]] inline InputMode NextSwitchMode(const UserSettings& settings, bool japaneseProfile, InputMode current) noexcept {
+    const bool typing = japaneseProfile && (settings.japaneseEnabled || settings.mixedTypingEnabled);
+    if (!typing) return current == InputMode::Convert ? InputMode::Direct : InputMode::Convert;
+    std::array<InputMode, 4> round{};
+    std::size_t count = 0;
+    for (const auto& [mode, bit] : SwitchOrderModes(settings.switchOrder)) {
+        if ((settings.switchModes & bit) != 0 && AvailableMode(settings, japaneseProfile, mode) == mode) round[count++] = mode;
+    }
+    if (count < 2) {
+        const auto typingMode = AvailableMode(settings, japaneseProfile, InputMode::Japanese);
+        return current == typingMode ? InputMode::Convert : typingMode;
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+        if (round[i] == current) return i + 1 == count ? round[0] : round[i + 1];
+    }
+    return round[0];
 }
 
 // Mix's ways of writing beside Japanese mode's: the name each is stored

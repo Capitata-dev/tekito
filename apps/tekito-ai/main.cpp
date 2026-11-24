@@ -33,6 +33,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -299,6 +300,15 @@ struct Step {
     std::vector<Tensor> state;
 };
 
+// What the request being answered runs with (none outside one): it is told
+// to stop once the one who asked has gone.
+Ort::RunOptions* g_runOptions = nullptr;
+
+const Ort::RunOptions& RunOptionsNow() {
+    static const Ort::RunOptions kNone{nullptr};
+    return g_runOptions ? *g_runOptions : kNone;
+}
+
 // The first output of a head graph for `rows` hidden states (and their
 // targets, when it takes them).
 std::vector<float> RunHead(Graph& head, const float* hidden, std::size_t rows, std::size_t width,
@@ -317,7 +327,7 @@ std::vector<float> RunHead(Graph& head, const float* hidden, std::size_t rows, s
         }
     }
     const char* out = head.outputs[0].c_str();
-    auto results = head.session->Run(Ort::RunOptions{nullptr}, in.data(), values.data(), values.size(), &out, 1);
+    auto results = head.session->Run(RunOptionsNow(), in.data(), values.data(), values.size(), &out, 1);
     const auto info = results[0].GetTensorTypeAndShapeInfo();
     const float* data = results[0].GetTensorData<float>();
     if (shapeOut) *shapeOut = info.GetShape();
@@ -354,7 +364,7 @@ Step Run(Graph& graph, std::size_t batch, std::size_t tokens, const std::vector<
     std::vector<const char*> in, out;
     for (const auto& n : graph.inputs) in.push_back(n.c_str());
     for (const auto& n : graph.outputs) out.push_back(n.c_str());
-    auto results = graph.session->Run(Ort::RunOptions{nullptr}, in.data(), values.data(), values.size(), out.data(), out.size());
+    auto results = graph.session->Run(RunOptionsNow(), in.data(), values.data(), values.size(), out.data(), out.size());
     Step step;
     const auto copy = [](Ort::Value& v, std::vector<float>& to, std::vector<std::int64_t>* shapeOut) {
         const auto info = v.GetTensorTypeAndShapeInfo();
@@ -434,7 +444,10 @@ public:
         return true;
     }
 
-    std::optional<AiConversion> Convert(const aihelper::Asked& asked) {
+    // Nothing when the sentences are too long for it, or (`failed`) when it
+    // could not answer: stopped, or something went wrong.
+    std::optional<AiConversion> Convert(const aihelper::Asked& asked, bool& failed) {
+        failed = false;
         try {
             if (!writes_) {
                 // A model that reads sentences alone: after the context; the
@@ -455,7 +468,8 @@ public:
             AiConversion answer{std::move(*scores), {}};
             if (asked.request != aihelper::Request::Score) answer.written = Write(asked.reading.size());
             return answer;
-        } catch (const Ort::Exception&) {
+        } catch (...) {
+            failed = true;
             return std::nullopt;
         }
     }
@@ -625,7 +639,9 @@ private:
             for (std::size_t r = 0; r < n && from + r < rows.size(); ++r) {
                 const auto& row = rows[from + r];
                 if (row.empty()) continue;
-                double sum = countFirst ? prompt->last[static_cast<std::size_t>(row[0])] : 0.0;
+                const auto first = static_cast<std::size_t>(row[0]);
+                if (countFirst && first >= prompt->last.size()) return std::nullopt;
+                double sum = countFirst ? prompt->last[first] : 0.0;
                 for (std::size_t t = 0; t + 1 < row.size(); ++t) sum += read.targetLogprobs[r * width + t];
                 scores[from + r] = sum;
             }
@@ -760,10 +776,49 @@ std::vector<std::uint8_t> Answer(Models& models, std::span<const std::uint8_t> m
     Model& model = forSettings ? models.settings : models.conversion;
     if (!model.Load(asked->model, asked->device, asked->gpu)) return aihelper::EncodeReply(aihelper::Status::NoModel);
     if (asked->request == aihelper::Request::Warm) return aihelper::EncodeReply(aihelper::Status::Ok);
-    const auto answer = model.Convert(*asked);
-    if (!answer) return aihelper::EncodeReply(aihelper::Status::TooLong);
+    bool failed = false;
+    const auto answer = model.Convert(*asked, failed);
+    if (!answer) return aihelper::EncodeReply(failed ? aihelper::Status::Failed : aihelper::Status::TooLong);
     return aihelper::EncodeReply(aihelper::Status::Ok, *answer);
 }
+
+// While a request is answered: its runs are stopped once the one who asked
+// has gone (it waits only so long, then closes the pipe), so the next one
+// is not kept waiting behind an answer nobody reads.
+class WhileAsked {
+public:
+    explicit WhileAsked(HANDLE pipe) : pipe_(pipe), watch_([this] { Watch(); }) { g_runOptions = &options_; }
+    ~WhileAsked() {
+        g_runOptions = nullptr;
+        {
+            std::lock_guard lock(lock_);
+            done_ = true;
+        }
+        wake_.notify_one();
+        watch_.join();
+    }
+    WhileAsked(const WhileAsked&) = delete;
+    WhileAsked& operator=(const WhileAsked&) = delete;
+
+private:
+    void Watch() {
+        std::unique_lock lock(lock_);
+        while (!wake_.wait_for(lock, std::chrono::milliseconds(50), [this] { return done_; })) {
+            DWORD available = 0;
+            if (!PeekNamedPipe(pipe_, nullptr, 0, nullptr, &available, nullptr) && GetLastError() == ERROR_BROKEN_PIPE) {
+                options_.SetTerminate();
+                return;
+            }
+        }
+    }
+
+    HANDLE pipe_;
+    Ort::RunOptions options_;
+    std::mutex lock_;
+    std::condition_variable wake_;
+    bool done_{false};
+    std::thread watch_;  // last: it uses the others
+};
 
 // The pipe, open to this user only and not over the network.
 HANDLE CreatePipe(const std::wstring& name, bool first) {
@@ -835,7 +890,15 @@ int Serve() {
         ResetEvent(event);
         const BOOL read = ReadFile(pipe, message.data(), static_cast<DWORD>(message.size()), nullptr, &overlapped);
         if (Wait(pipe, overlapped, read, kReadWait, done)) {
-            const auto reply = Answer(models, std::span<const std::uint8_t>(message.data(), done), stop);
+            std::vector<std::uint8_t> reply;
+            try {
+                WhileAsked asked(pipe);
+                reply = Answer(models, std::span<const std::uint8_t>(message.data(), done), stop);
+            } catch (...) {
+                // One request that went wrong: answered as such, and the
+                // helper goes on for the next.
+                reply = aihelper::EncodeReply(aihelper::Status::Failed);
+            }
             overlapped = {};
             overlapped.hEvent = event;
             ResetEvent(event);
@@ -875,7 +938,8 @@ int ConvertFile(AiModel which, AiDevice device, std::uint32_t gpu, const std::fi
         aihelper::Asked asked{aihelper::Request::Convert, which, device, {}, fields[0],
                               std::vector<std::wstring>(fields.begin() + 1, fields.end())};
         const auto start = std::chrono::steady_clock::now();
-        const auto answer = model.Convert(asked);
+        bool failed = false;
+        const auto answer = model.Convert(asked, failed);
         const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         std::printf("%s\t%.1f ms\n", Utf8(fields[0]).c_str(), ms);
         if (!answer) continue;
@@ -954,7 +1018,7 @@ int ListDevices(std::string_view prepare) {
 
 // A console program, started without a console (CREATE_NO_WINDOW), so
 // --convert prints where it was run from.
-int wmain(int argc, wchar_t** argv) {
+int wmain(int argc, wchar_t** argv) try {
     int result = 0;
     if (argc >= 2 && std::wstring_view(argv[1]) == L"--devices") {
         result = ListDevices(argc >= 4 && std::wstring_view(argv[2]) == L"--prepare" ? Utf8(argv[3]) : std::string{});
@@ -974,4 +1038,6 @@ int wmain(int argc, wchar_t** argv) {
         result = Serve();
     }
     return result;
+} catch (...) {
+    return 3;
 }

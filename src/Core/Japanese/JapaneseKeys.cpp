@@ -1,6 +1,10 @@
 #include "Core/Japanese/JapaneseKeys.h"
 
+#include "Core/Japanese/KanaText.h"
+#include "Core/Japanese/KanjiSets.h"
+
 #include <algorithm>
+#include <unordered_set>
 
 namespace tekito::japanese {
 namespace {
@@ -87,6 +91,25 @@ std::optional<KeyCommand> TranslateKey(const JapaneseComposer& composer, const K
             break;
         }
     }
+    // The mark left at punctuation (CommitBeforeMark): Space and Henkan
+    // show its other forms, Backspace drops it, Esc steps back; any other
+    // key commits it and goes on to the application, as it would have
+    // with the mark committed.
+    if (composer.MarkLeftUntouched()) {
+        switch (key.key) {
+        case Key::Character:
+        case Key::Space:
+        case Key::Convert:
+        case Key::Backspace:
+        case Key::Escape:
+            break;
+        default: {
+            auto command = Make(Action::Commit);
+            command.letKeyThrough = true;
+            return command;
+        }
+        }
+    }
     if (composer.IsConverted()) {
         switch (key.key) {
         case Key::Space:
@@ -96,23 +119,86 @@ std::optional<KeyCommand> TranslateKey(const JapaneseComposer& composer, const K
         case Key::Up:
             return Make(Action::PreviousCandidate);
         case Key::PageDown:
-        case Key::PageUp:
-            // With the list open, a page at a time.
-            if (!composer.IsCandidateListOpen()) break;
-            return WithDelta(key.key == Key::PageDown ? Action::NextCandidate : Action::PreviousCandidate,
-                             static_cast<int>(std::max<std::size_t>(options.pageSize, 1)));
+        case Key::PageUp: {
+            // With the list open, a page at a time: the first page, then
+            // the pages of columns after it.
+            if (!composer.IsCandidateListOpen() || !composer.FocusedCandidates()) break;
+            const std::size_t size = composer.FocusedCandidates()->size();
+            const std::size_t at = composer.FocusedSelection();
+            const auto page = ListPageOf(at, size, options.pageSize);
+            // Past the last page, round to the first, and back from the
+            // first to the last, as Space goes round: the text stays.
+            if (key.key == Key::PageDown) {
+                const std::size_t next = page.start + page.count;
+                if (page.pages <= 1) return Make(Action::Nothing);
+                return WithDelta(Action::NextCandidate, static_cast<int>(next >= size ? size - at : next - at));
+            }
+            if (page.pages <= 1) return Make(Action::Nothing);
+            const auto before = ListPageOf(page.start == 0 ? size - 1 : page.start - 1, size, options.pageSize);
+            return WithDelta(Action::PreviousCandidate,
+                             static_cast<int>(page.start == 0 ? at + size - before.start : at - before.start));
+        }
+        case Key::Home:
+        case Key::End: {
+            // The list open: its first or last candidate. Otherwise the
+            // first or last phrase, as in Microsoft IME; the text stays.
+            const auto* candidates = composer.IsCandidateListOpen() ? composer.FocusedCandidates() : nullptr;
+            if (candidates && !candidates->empty()) {
+                const std::size_t at = composer.FocusedSelection();
+                if (key.key == Key::Home) {
+                    return at == 0 ? Make(Action::Nothing) : WithDelta(Action::PreviousCandidate, static_cast<int>(at));
+                }
+                const std::size_t last = candidates->size() - 1;
+                return at >= last ? Make(Action::Nothing) : WithDelta(Action::NextCandidate, static_cast<int>(last - at));
+            }
+            if (key.shift) break;
+            return WithDelta(Action::MoveFocus, key.key == Key::Home ? -100000 : 100000);
+        }
         case Key::Left:
-        case Key::Right:
+        case Key::Right: {
+            // With the list open, the column beside: from the first page
+            // into the columns on its right, as far as the list goes, and
+            // back into the first page from the first column. The phrases
+            // move with the list closed (Shift resizes them either way).
+            const auto* candidates = composer.IsCandidateListOpen() ? composer.FocusedCandidates() : nullptr;
+            const std::size_t pageSize = std::max<std::size_t>(options.pageSize, 1);
+            if (!key.shift && candidates && !candidates->empty()) {
+                const std::size_t at = composer.FocusedSelection();
+                const bool firstPage = at < pageSize;
+                if (firstPage && (key.key == Key::Left || candidates->size() <= pageSize)) {
+                    return Make(Action::Nothing);
+                }
+                if (key.key == Key::Right) {
+                    const std::size_t size = candidates->size();
+                    // The column on the right (the next page's first after
+                    // the third, the first column from the first page); a
+                    // shorter one, its last row. With no column on the
+                    // right, round to the first page, as Space goes: never
+                    // down the same column.
+                    const auto columnOf = [&](std::size_t index) {
+                        const auto page = ListPageOf(index, size, pageSize);
+                        return page.index * kListColumns + (index - page.start) / pageSize;
+                    };
+                    if (at + pageSize < size) return WithDelta(Action::NextCandidate, static_cast<int>(pageSize));
+                    if (columnOf(size - 1) > columnOf(at)) {
+                        return WithDelta(Action::NextCandidate, static_cast<int>(size - 1 - at));
+                    }
+                    return WithDelta(Action::NextCandidate, static_cast<int>(size - at));
+                }
+                return WithDelta(Action::PreviousCandidate, static_cast<int>(std::min(at, pageSize)));
+            }
             return WithDelta(key.shift ? Action::Resize : Action::MoveFocus, key.key == Key::Left ? -1 : 1);
+        }
         default:
             break;
         }
-        // With the list open, 1-9 choose from the page shown.
+        // With the list open, 1-9 choose from the first page, the one
+        // numbered.
         if (key.digit >= 1 && key.digit <= 9 && composer.IsCandidateListOpen() && !key.shift) {
-            const std::size_t pageSize = std::max<std::size_t>(options.pageSize, 1);
-            const std::size_t page = composer.FocusedSelection() / pageSize * pageSize;
+            // In the columns, unnumbered, a digit stays with the list.
+            if (composer.FocusedSelection() >= std::max<std::size_t>(options.pageSize, 1)) return Make(Action::Nothing);
             const auto* candidates = composer.FocusedCandidates();
-            const std::size_t index = page + static_cast<std::size_t>(key.digit - 1);
+            const std::size_t index = static_cast<std::size_t>(key.digit - 1);
             if (candidates && index < candidates->size()) {
                 auto command = Make(Action::SelectCandidate);
                 command.index = index;
@@ -185,6 +271,15 @@ std::optional<KeyCommand> TranslateKey(const JapaneseComposer& composer, const K
     // converted it steps through them.
     if (key.key == Key::Tab && (composer.IsTyping() || composer.IsConverted())) {
         if (composer.IsConverted() && !composer.IsLivePreview()) {
+            // With the list open: Tab goes into the columns after the first
+            // page, Shift+Tab back to its top.
+            const auto* candidates = composer.IsCandidateListOpen() ? composer.FocusedCandidates() : nullptr;
+            const std::size_t pageSize = std::max<std::size_t>(options.pageSize, 1);
+            if (candidates && candidates->size() > pageSize) {
+                const std::size_t at = composer.FocusedSelection();
+                if (!key.shift && at < pageSize) return WithDelta(Action::NextCandidate, static_cast<int>(pageSize - at));
+                if (key.shift && at >= pageSize) return WithDelta(Action::PreviousCandidate, static_cast<int>(at));
+            }
             return Make(key.shift ? Action::PreviousCandidate : Action::NextCandidate);
         }
         return Make(Action::ShowCandidates);
@@ -224,16 +319,24 @@ KeyOutcome ApplyKey(JapaneseComposer& composer, const KeyCommand& command) {
     case Action::Insert:
         // After a conversion, typing on commits it and starts anew (live
         // conversion types on).
-        if (composer.CommitsBeforeTyping()) outcome.committed = composer.Commit();
+        // A mark left at punctuation goes before what is typed next.
+        if (composer.CommitsBeforeTyping() || composer.MarkLeft()) outcome.committed = composer.Commit();
         composer.Insert(command.character);
         // A punctuation mark commits the text up to it, converted as Space
-        // converts it (live conversion and Mix convert on Enter themselves).
+        // converts it (live conversion and Mix convert on Enter themselves);
+        // the mark stays for its other forms.
         if (composer.EndsAtPunctuation()) {
-            if (!composer.IsConverted()) composer.Convert();
-            outcome.committed = outcome.committed.value_or(std::wstring{}) + composer.Commit();
+            const std::wstring before = composer.CommitBeforeMark(command.character);
+            if (!before.empty() || !composer.IsComposing()) {
+                outcome.committed = outcome.committed.value_or(std::wstring{}) + before;
+            }
         }
         break;
     case Action::Backspace:
+        if (composer.MarkLeftUntouched()) {
+            composer.DropMark();
+            break;
+        }
         composer.Backspace();
         break;
     case Action::Cancel:
@@ -296,8 +399,61 @@ KeyOutcome ApplyKey(JapaneseComposer& composer, const KeyCommand& command) {
     case Action::InsertOutside:
         outcome.outside = std::wstring(1, command.character);
         break;
+    case Action::Nothing:
+        break;
     }
     return outcome;
+}
+
+// Rows the same but for width (ＫＯＵＥＮ and KOUEN, ３千円 and 3千円, ｺｳｴﾝ
+// and コウエン): the full-width ASCII one is the wider, the half-width
+// katakana one and the ASCII one beside a full-width twin the narrower.
+// Katakana and hiragana as usually written take no mark.
+void MarkVariantForms(std::vector<CandidateList::Row>& rows, const KanjiSets* sets) {
+    if (!sets || !sets->HasVariants()) return;
+    std::unordered_set<std::wstring> texts;
+    for (const auto& row : rows) texts.insert(row.text);
+    for (auto& row : rows) {
+        const auto standard = sets->StandardForm(row.text);
+        if (!standard || !texts.contains(standard->text)) continue;
+        row.oldForm = standard->kind == KanjiSets::VariantKind::Old;
+        row.variantForm = !row.oldForm;
+    }
+}
+
+void MarkWidths(std::vector<CandidateList::Row>& rows) {
+    using Width = CandidateList::Row::Width;
+    const auto has = [](const std::wstring& text, wchar_t from, wchar_t to) {
+        return std::any_of(text.begin(), text.end(), [&](wchar_t c) { return c >= from && c <= to; });
+    };
+    std::vector<std::wstring> keys;
+    keys.reserve(rows.size());
+    for (const auto& row : rows) keys.push_back(ToHalfWidthKatakana(row.text));
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        bool twin = false;
+        bool fullTwin = false;
+        for (std::size_t j = 0; j < rows.size(); ++j) {
+            if (j == i || keys[j] != keys[i] || rows[j].text == rows[i].text) continue;
+            twin = true;
+            fullTwin = fullTwin || has(rows[j].text, 0xFF01, 0xFF5E);
+        }
+        if (!twin) continue;
+        if (has(rows[i].text, 0xFF01, 0xFF5E)) {
+            rows[i].width = Width::Full;
+        } else if (has(rows[i].text, 0xFF61, 0xFF9F) || (fullTwin && has(rows[i].text, 0x21, 0x7E))) {
+            rows[i].width = Width::Half;
+        }
+    }
+}
+
+ListPage ListPageOf(std::size_t index, std::size_t size, std::size_t pageSize) noexcept {
+    pageSize = std::max<std::size_t>(pageSize, 1);
+    const std::size_t grid = kListColumns * pageSize;
+    const std::size_t pages = size <= pageSize ? 1 : 1 + (size - pageSize + grid - 1) / grid;
+    if (index < pageSize || size <= pageSize) return {0, std::min(pageSize, size), false, 0, pages};
+    const std::size_t page = (index - pageSize) / grid;
+    const std::size_t start = pageSize + page * grid;
+    return {start, std::min(grid, size - start), true, page + 1, pages};
 }
 
 CandidateList CandidateListFor(const JapaneseComposer& composer, std::size_t pageSize) {
@@ -319,14 +475,23 @@ CandidateList CandidateListFor(const JapaneseComposer& composer, std::size_t pag
     const std::wstring reading = composer.FocusedReading();
     for (std::size_t i = 0; i < candidates->size(); ++i) {
         const auto& candidate = (*candidates)[i];
-        list.rows.push_back({candidate.text, reading, static_cast<std::uint32_t>(i % pageSize + 1),
-                             candidate.slip || candidate.spellingCorrection,
-                             i > 0 && (*candidates)[i - 1].chunk && !candidate.chunk});
+        // The first page numbered; the columns after it not, as digits
+        // choose from the first page only.
+        list.rows.push_back({candidate.text, reading, static_cast<std::uint32_t>(i < pageSize ? i + 1 : 0),
+                             candidate.slip || candidate.spellingCorrection || candidate.englishCorrection,
+                             i > 0 && (*candidates)[i - 1].chunk && !candidate.chunk, candidate.asTyped,
+                             candidate.slang, candidate.repeat});
     }
+    MarkWidths(list.rows);
+    MarkVariantForms(list.rows, composer.KanjiSetsInUse());
     const std::size_t selected = std::min(composer.FocusedSelection(), candidates->size() - 1);
     list.selected = selected;
-    list.pageStart = selected / pageSize * pageSize;
-    list.count = std::min(pageSize, list.rows.size() - list.pageStart);
+    const auto page = ListPageOf(selected, list.rows.size(), pageSize);
+    list.pageStart = page.start;
+    list.count = page.count;
+    list.columnRows = page.columns ? pageSize : 0;
+    list.page = page.index;
+    list.pages = page.pages;
     return list;
 }
 
