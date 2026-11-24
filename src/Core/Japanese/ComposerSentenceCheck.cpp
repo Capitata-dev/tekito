@@ -516,10 +516,16 @@ std::vector<std::size_t> JapaneseComposer::ReadBest(const std::vector<std::vecto
         if (weighed) {
             const auto& w = sentenceWeights_;
             const auto sum = [&](const std::array<float, kSentenceFeatures>& f) {
-                double total = w.model * f[kFeatureModel] + w.prior * f[kFeaturePrior] + w.whole * f[kFeatureWhole] +
-                               w.cost * std::clamp(f[kFeatureCost], 0.0f, 10.0f) + w.changed * f[kFeatureChanged] +
-                               w.keepsTopic * f[kFeatureKeepsTopic];
-                for (std::size_t s = 0; s < 5; ++s) total += w.signals[s] * f[kFeatureSignals + s];
+                // Each weighed feature in float, as the weights were fitted;
+                // the sum of the signals in double.
+                const float base = w.model * f[kFeatureModel] + w.prior * f[kFeaturePrior] +
+                                   w.whole * f[kFeatureWhole] + w.cost * std::clamp(f[kFeatureCost], 0.0f, 10.0f) +
+                                   w.changed * f[kFeatureChanged] + w.keepsTopic * f[kFeatureKeepsTopic];
+                double total = base;
+                for (std::size_t s = 0; s < 5; ++s) {
+                    const float signal = w.signals[s] * f[kFeatureSignals + s];
+                    total += signal;
+                }
                 return total;
             };
             const double first = sum(features[0]);
