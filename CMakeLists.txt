@@ -244,17 +244,20 @@ if(TEKITO_BUILD_AI)
     )
 
     # The processor's runtime pack: TekitoAI.exe with ONNX Runtime's own
-    # release (MIT, the same version as Windows ML's), in ai-runtime-cpu/.
-    set(TEKITO_ORT_VERSION "1.28.3")
+    # release (MIT, 1.28.3, the same version as Windows ML's), in
+    # ai-runtime-cpu/. ONNX Runtime's GitHub releases are gone (November
+    # 2026) and NuGet has no 1.28.3, so its DLL, LICENSE and
+    # ThirdPartyNotices.txt come from TEKITO's published runtime pack, which
+    # carries them unchanged (the DLL's SHA-256 is 4D2774A5...A6E2 in both).
     FetchContent_Declare(ort_cpu
-        URL https://github.com/microsoft/onnxruntime/releases/download/v${TEKITO_ORT_VERSION}/onnxruntime-win-x64-${TEKITO_ORT_VERSION}.zip
-        URL_HASH SHA256=1d6fab48e85f948436af7c8c971d2c145cf224e2c444755dec894f8b0de11a83
+        URL https://github.com/Capitata-dev/tekito/releases/download/ai-models-3/TEKITO-ai-runtime.zip
+        URL_HASH SHA256=af216815e7b721890841a558d0f4f157dc67c6887f29817d72342482dc8ed6c5
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     )
     FetchContent_MakeAvailable(ort_cpu)
     add_custom_command(TARGET TekitoAI POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:TekitoAI>/ai-runtime-cpu"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:TekitoAI>" "${ort_cpu_SOURCE_DIR}/lib/onnxruntime.dll"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:TekitoAI>" "${ort_cpu_SOURCE_DIR}/onnxruntime.dll"
                 "${ort_cpu_SOURCE_DIR}/LICENSE" "${ort_cpu_SOURCE_DIR}/ThirdPartyNotices.txt"
                 "$<TARGET_FILE_DIR:TekitoAI>/ai-runtime-cpu"
     )
