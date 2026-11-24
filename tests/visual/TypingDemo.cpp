@@ -298,10 +298,13 @@ int wmain(int argc, wchar_t** argv) {
 
     tekito::tsf::CandidateWindow window;
     if (!window.Initialize(instance, [](std::size_t) {})) return 1;
-    // TEKITO_PREVIEW_LANGUAGE=ja records the demo with the Japanese tags.
+    // TEKITO_PREVIEW_LANGUAGE=ja records the demo with the Japanese tags,
+    // and English words' meanings in Japanese, as Settings in Japanese shows.
     wchar_t language[8]{};
+    auto meaningLanguage = tekito::japanese::MeaningLanguage::Word;
     if (GetEnvironmentVariableW(L"TEKITO_PREVIEW_LANGUAGE", language, 8) > 0 && wcscmp(language, L"ja") == 0) {
         window.SetJapanese(true);
+        meaningLanguage = tekito::japanese::MeaningLanguage::Japanese;
     }
 
     std::ofstream timing(outputFolder / L"frames.txt");
@@ -499,11 +502,11 @@ int wmain(int argc, wchar_t** argv) {
     const auto show = [&](const tekito::InputStateMachine& state) {
         auto rows = state.Candidates();
         for (std::size_t i = state.PageStart(); i < rows.size() && i < state.PageStart() + state.VisibleCount(); ++i) {
-            rows[i].hasMeaning = meanings.Lookup(rows[i].text).has_value();
+            rows[i].hasMeaning = meanings.Lookup(rows[i].text, {}, meaningLanguage).has_value();
         }
         tekito::tsf::CandidateDetail detail;
         if (state.SelectedIndex() < rows.size()) {
-            if (const auto meaning = meanings.Lookup(rows[state.SelectedIndex()].text)) {
+            if (const auto meaning = meanings.Lookup(rows[state.SelectedIndex()].text, {}, meaningLanguage)) {
                 detail = {meaning->headword, meaning->senses};
             }
         }
