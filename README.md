@@ -202,14 +202,13 @@ is not affiliated with them.
 
 ![TEKITO Settings](docs/images/settings.png)
 
-Home finds a setting by its name. With the AI model downloaded, you can
-also ask in your own words (“stop correcting my English”), and AI changes
-the setting for you, with a way back. Each page shows what most people
+Home finds a setting by its name or by tags, such as the mode it works in
+or what it is about (look, candidate list, typos). Each page shows what most people
 change, and **More settings** at its end holds the rest; **All settings**
 shows every setting on one page.
 
 Your dictionary and what TEKITO learns can be encrypted under
-**Settings → Dictionary & learning**, with a recovery code. Rubi, Home's companion,
+**Settings → Dictionary & learning**, with a recovery code. Rubi, TEKITO's companion,
 can also sit in a corner of the desktop, showing the mode in its color and
 what a word dropped on it reads and means (**Settings → General**). Settings,
 the setup program and TEKITO's messages are in English and Japanese.
