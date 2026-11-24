@@ -91,7 +91,8 @@ constexpr AiModelInfo kAiRuntimeWindowsMl{
     L"ai-runtime", L"https://github.com/Capitata-dev/tekito/releases/download/ai-models-3/TEKITO-ai-runtime-windows-ml.zip",
     "003B574CB4874F37415B29A3B214CC555032D27197702A10140DE8195DB3AE14", 18131689ull, L"2026.11"};
 
-inline tekito::userdata::AiModelInstallError DownloadAiPack(const AiModelInfo& pack, const std::filesystem::path& root);
+inline tekito::userdata::AiModelInstallError DownloadAiPack(const AiModelInfo& pack, const std::filesystem::path& root,
+                                                            double from = 0.0, double to = 1.0);
 
 // The copy of what runs the models this Settings would download: with
 // Windows ML when that is the one there.
@@ -115,7 +116,7 @@ inline bool AiRuntimeOutdated(const std::filesystem::path& root) {
 // What runs the models, when it is not there or is too old.
 inline tekito::userdata::AiModelInstallError UpdateAiRuntime(const std::filesystem::path& root) {
     if (!AiRuntimeOutdated(root)) return tekito::userdata::AiModelInstallError::None;
-    return DownloadAiPack(AiRuntimeFor(root), root);
+    return DownloadAiPack(AiRuntimeFor(root), root, 0.0, 0.05);
 }
 
 // Downloads what runs the models when it is not there yet, then `model`
@@ -123,7 +124,7 @@ inline tekito::userdata::AiModelInstallError UpdateAiRuntime(const std::filesyst
 inline tekito::userdata::AiModelInstallError DownloadAiModel(int model, const std::filesystem::path& root) {
     using tekito::userdata::AiModelInstallError;
     if (const auto error = UpdateAiRuntime(root); error != AiModelInstallError::None) return error;
-    if (const auto error = DownloadAiPack(kAiModels[model - 1], root); error != AiModelInstallError::None) return error;
+    if (const auto error = DownloadAiPack(kAiModels[model - 1], root, 0.05, 1.0); error != AiModelInstallError::None) return error;
     return AiModelInstallError::None;
 }
 
@@ -132,14 +133,71 @@ inline tekito::userdata::AiModelInstallError DownloadAiRuntimeWindowsMl(const st
     return DownloadAiPack(kAiRuntimeWindowsMl, root);
 }
 
-// Downloads one pack and installs it into `root`.
-inline tekito::userdata::AiModelInstallError DownloadAiPack(const AiModelInfo& pack, const std::filesystem::path& root) {
+// Setup's progress file (TEKITO_PROGRESS_FILE, which install.ps1 sets for
+// "--install-ai"): "ai <fraction>" as the model comes. Nothing otherwise.
+inline void NoteAiProgress(double done) {
+    static const std::wstring file = [] {
+        std::wstring path(MAX_PATH, L'?');
+        path.resize(GetEnvironmentVariableW(L"TEKITO_PROGRESS_FILE", path.data(), static_cast<DWORD>(path.size())));
+        return path;
+    }();
+    if (file.empty()) return;
+    char text[32]{};
+    sprintf_s(text, "ai %.3f", std::clamp(done, 0.0, 1.0));
+    std::ofstream out(std::filesystem::path(file), std::ios::binary | std::ios::trunc);
+    out << text;
+}
+
+// How much of a download has come, told on as part of `from` to `to`.
+class DownloadProgress final : public IBindStatusCallback {
+public:
+    DownloadProgress(double from, double to) : from_(from), to_(to) {}
+    STDMETHODIMP QueryInterface(REFIID id, void** object) override {
+        if (!object) return E_POINTER;
+        if (id == __uuidof(IUnknown) || id == __uuidof(IBindStatusCallback)) {
+            *object = static_cast<IBindStatusCallback*>(this);
+            return S_OK;
+        }
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    // On the stack for the one download: nothing to free.
+    STDMETHODIMP_(ULONG) AddRef() override { return 1; }
+    STDMETHODIMP_(ULONG) Release() override { return 1; }
+    STDMETHODIMP OnStartBinding(DWORD, IBinding*) override { return S_OK; }
+    STDMETHODIMP GetPriority(LONG*) override { return E_NOTIMPL; }
+    STDMETHODIMP OnLowResource(DWORD) override { return S_OK; }
+    STDMETHODIMP OnProgress(ULONG progress, ULONG total, ULONG, LPCWSTR) override {
+        if (total == 0) return S_OK;
+        const int permille = static_cast<int>(1000.0 * progress / total);
+        if (permille != told_) {
+            told_ = permille;
+            NoteAiProgress(from_ + (to_ - from_) * progress / total);
+        }
+        return S_OK;
+    }
+    STDMETHODIMP OnStopBinding(HRESULT, LPCWSTR) override { return S_OK; }
+    STDMETHODIMP GetBindInfo(DWORD*, BINDINFO*) override { return E_NOTIMPL; }
+    STDMETHODIMP OnDataAvailable(DWORD, DWORD, FORMATETC*, STGMEDIUM*) override { return S_OK; }
+    STDMETHODIMP OnObjectAvailable(REFIID, IUnknown*) override { return S_OK; }
+
+private:
+    double from_;
+    double to_;
+    int told_{-1};
+};
+
+// Downloads one pack and installs it into `root`; how much has come is
+// told as part of `from` to `to` (NoteAiProgress).
+inline tekito::userdata::AiModelInstallError DownloadAiPack(const AiModelInfo& pack, const std::filesystem::path& root,
+                                                            double from, double to) {
     using tekito::userdata::AiModelInstallError;
     wchar_t folder[MAX_PATH]{};
     GetTempPathW(MAX_PATH, folder);
     const auto file = std::filesystem::path(folder) /
                       (L"tekito-" + std::wstring(pack.pack) + L"-" + std::to_wstring(GetCurrentProcessId()) + L".zip");
-    const auto error = FAILED(URLDownloadToFileW(nullptr, pack.url, file.c_str(), 0, nullptr))
+    DownloadProgress progress(from, to);
+    const auto error = FAILED(URLDownloadToFileW(nullptr, pack.url, file.c_str(), 0, &progress))
                            ? AiModelInstallError::Download
                            : tekito::userdata::InstallAiModelPack(file, pack.sha256, pack.pack, root);
     std::error_code ignored;

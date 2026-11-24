@@ -182,6 +182,15 @@ struct Wizard {
     std::atomic<int> installExitCode{1};
     bool completed{false};
     float animation{0.0f};
+    // How far the install is: the step setup runs (InstallStep), what
+    // install.ps1 wrote it is doing (progressFile: "<stage> <fraction>"),
+    // and what the bar shows (0 to 1, never going back).
+    std::filesystem::path progressFile;
+    std::atomic<int> installStep{0};
+    std::wstring progressStage;
+    double progressDone{0.0};
+    float shownProgress{0.0f};
+    int progressPoll{0};
 
     // Interaction.
     int hover{-1};
@@ -520,6 +529,29 @@ bool PayloadMatches(const std::filesystem::path& zip) {
     return matches;
 }
 
+// The steps setup runs, in order (Wizard::installStep).
+enum InstallStep : int { kStepVerify = 0, kStepData, kStepProgram, kStepFinish };
+
+// Where each stage install.ps1 tells (and setup's own check) sits on the
+// bar, as fractions of the whole: the downloads take the most.
+struct StageSpan {
+    const wchar_t* stage;
+    float from;
+    float to;
+};
+constexpr StageSpan kStagesJapaneseAi[] = {
+    {L"verify", 0.00f, 0.04f}, {L"check", 0.04f, 0.05f}, {L"download", 0.05f, 0.50f}, {L"unpack", 0.50f, 0.56f},
+    {L"packs", 0.56f, 0.62f}, {L"program", 0.62f, 0.68f}, {L"finish", 0.68f, 0.70f}, {L"ai", 0.70f, 0.98f},
+};
+constexpr StageSpan kStagesJapanese[] = {
+    {L"verify", 0.00f, 0.05f}, {L"check", 0.05f, 0.06f}, {L"download", 0.06f, 0.72f}, {L"unpack", 0.72f, 0.80f},
+    {L"packs", 0.80f, 0.88f}, {L"program", 0.88f, 0.95f}, {L"finish", 0.95f, 1.00f},
+};
+constexpr StageSpan kStagesEnglish[] = {
+    {L"verify", 0.00f, 0.10f}, {L"check", 0.10f, 0.12f}, {L"packs", 0.12f, 0.50f}, {L"program", 0.50f, 0.85f},
+    {L"finish", 0.85f, 1.00f},
+};
+
 struct InstallChoices {
     std::filesystem::path installRoot;
     bool startMenuShortcut{true};
@@ -692,7 +724,8 @@ void OpenAsUser(const std::wstring& target) {
 int StepCode(int code) { return code == -1 ? 5 : code == -2 ? 6 : code == -3 ? 7 : code; }
 
 int InstallEmbeddedPackage(const std::filesystem::path& self, const InstallChoices& choices,
-                           std::filesystem::path& installLog) {
+                           std::filesystem::path& installLog, const std::filesystem::path& progressFile,
+                           std::atomic<int>& step) {
     std::uint64_t payloadOffset = 0;
     std::uint64_t payloadSize = 0;
     if (!ReadPayloadBounds(self, payloadOffset, payloadSize)) return 2;
@@ -718,7 +751,8 @@ int InstallEmbeddedPackage(const std::filesystem::path& self, const InstallChoic
                                  L" -StartMenuShortcut:" + flag(choices.startMenuShortcut) +
                                  L" -Japanese:" + flag(choices.japanese) +
                                  L" -KeepEnglishProfile:" + flag(choices.keepEnglish) +
-                                 (choices.ai ? L" -AiModel light" : L"");
+                                 (choices.ai ? L" -AiModel light" : L"") +
+                                 (progressFile.empty() ? std::wstring{} : L" -ProgressFile " + QuotePowerShell(progressFile.wstring()));
     std::filesystem::path userTemp;
     bool userStep = false;
     // Unpacked and checked against its manifest; the user's Data Packs (as
@@ -732,14 +766,17 @@ int InstallEmbeddedPackage(const std::filesystem::path& self, const InstallChoic
                                     tempRoot));
     if (code == 0) {
         userStep = true;
+        step.store(kStepData);
         code = StepCode(RunAsUser(install + L" -Part data", packageRoot, &userTemp));
     }
     if (code == 0) {
         userStep = false;
+        step.store(kStepProgram);
         code = StepCode(RunElevated(install + L" -Part program", tempRoot));
     }
     if (code == 0) {
         userStep = true;
+        step.store(kStepFinish);
         code = StepCode(RunAsUser(install + L" -Part finish", packageRoot, &userTemp));
     }
     // A failed install keeps its record: the user's steps in the user's
@@ -885,6 +922,75 @@ std::wstring FailureMessage(int code, const std::filesystem::path& log) {
     }
 }
 
+// The user at the desktop's temporary folder: where install.ps1, run as
+// the user and elevated, writes how far it is.
+std::filesystem::path UserTempFolder() {
+    const HANDLE token = DesktopUserToken();
+    if (!token) return {};
+    std::filesystem::path folder;
+    LPVOID environment = nullptr;
+    if (CreateEnvironmentBlock(&environment, token, FALSE)) {
+        for (auto* entry = static_cast<const wchar_t*>(environment); *entry; entry += wcslen(entry) + 1) {
+            if (_wcsnicmp(entry, L"TEMP=", 5) == 0) folder = std::filesystem::path(entry + 5);
+        }
+        DestroyEnvironmentBlock(environment);
+    }
+    CloseHandle(token);
+    return folder;
+}
+
+// Reads what install.ps1 last wrote it is doing: "<stage> <fraction>".
+void ReadProgress(Wizard& wizard) {
+    if (wizard.progressFile.empty()) return;
+    std::ifstream in(wizard.progressFile, std::ios::binary);
+    std::string stage;
+    double done = 0.0;
+    if (!(in >> stage >> done) || stage.size() > 16) return;
+    wizard.progressStage.assign(stage.begin(), stage.end());
+    wizard.progressDone = std::clamp(done, 0.0, 1.0);
+}
+
+// The bar's place now: the stage install.ps1 is in, within its span; setup's
+// own check creeps along its span while it runs. Never goes back.
+void UpdateProgress(Wizard& wizard) {
+    const StageSpan* stages = kStagesEnglish;
+    std::size_t count = std::size(kStagesEnglish);
+    if (wizard.japanese && wizard.ai) {
+        stages = kStagesJapaneseAi;
+        count = std::size(kStagesJapaneseAi);
+    } else if (wizard.japanese) {
+        stages = kStagesJapanese;
+        count = std::size(kStagesJapanese);
+    }
+    const auto span = [&](std::wstring_view name) -> const StageSpan* {
+        for (std::size_t i = 0; i < count; ++i) {
+            if (name == stages[i].stage) return &stages[i];
+        }
+        return nullptr;
+    };
+    float at = 0.0f;
+    if (wizard.installStep.load() == kStepVerify || wizard.progressStage.empty()) {
+        const auto* verify = span(L"verify");
+        const float creep = 1.0f - std::exp(-wizard.animation * 0.6f);
+        at = verify->from + (verify->to - verify->from) * 0.9f * creep;
+    } else if (const auto* stage = span(wizard.progressStage)) {
+        at = stage->from + (stage->to - stage->from) * static_cast<float>(wizard.progressDone);
+    }
+    wizard.shownProgress = std::max(wizard.shownProgress, std::min(at, 0.99f));
+}
+
+// What the bar says the install is doing.
+const wchar_t* StageLabel(const Wizard& wizard) {
+    const std::wstring_view stage = wizard.installStep.load() == kStepVerify ? L"verify" : wizard.progressStage;
+    if (stage == L"download") return Tr(L"Downloading the Japanese data", L"日本語のデータをダウンロードしています");
+    if (stage == L"unpack") return Tr(L"Checking the Japanese data", L"日本語のデータを確認しています");
+    if (stage == L"packs") return Tr(L"Installing the dictionaries", L"辞書をインストールしています");
+    if (stage == L"program") return Tr(L"Installing TEKITO", L"TEKITO をインストールしています");
+    if (stage == L"ai") return Tr(L"Downloading the AI model", L"AI モデルをダウンロードしています");
+    if (stage == L"finish") return Tr(L"Finishing", L"仕上げています");
+    return Tr(L"Getting ready", L"準備しています");
+}
+
 void StartInstall(Wizard& wizard) {
     // The installing screen has no buttons: what the mouse was over is gone.
     wizard.hover = -1;
@@ -897,6 +1003,16 @@ void StartInstall(Wizard& wizard) {
 #endif
     wizard.screen = Screen::Installing;
     wizard.installExitCode.store(1);
+    wizard.installStep.store(kStepVerify);
+    wizard.progressStage.clear();
+    wizard.progressDone = 0.0;
+    wizard.shownProgress = 0.0f;
+    wizard.animation = 0.0f;
+    if (const auto temp = UserTempFolder(); !temp.empty()) {
+        wizard.progressFile = temp / L"TEKITO-setup-progress.txt";
+        std::error_code ignored;
+        std::filesystem::remove(wizard.progressFile, ignored);
+    }
     SetTimer(wizard.window, kAnimationTimer, 16, nullptr);
     const HWND window = wizard.window;
     const auto self = wizard.self;
@@ -904,7 +1020,8 @@ void StartInstall(Wizard& wizard) {
                                  wizard.japanese && wizard.ai, wizard.japanese && wizard.keepEnglish};
     try {
         wizard.installThread = std::thread([&wizard, window, self, choices] {
-            wizard.installExitCode.store(InstallEmbeddedPackage(self, choices, wizard.installLog));
+            wizard.installExitCode.store(
+                InstallEmbeddedPackage(self, choices, wizard.installLog, wizard.progressFile, wizard.installStep));
             PostMessageW(window, kWizardInstallComplete, 0, 0);
         });
     } catch (...) {
@@ -1488,11 +1605,24 @@ void Paint(Wizard& wizard) {
                      : Tr(L"This takes about a minute. Please keep this window open.",
                           L"1 分ほどかかります。このウィンドウは開いたままにしてください。"),
                  wizard.captionCentered.Get(), D2D1::RectF(0.0f, 216.0f, kWidth, 236.0f), p.ink2);
-        // Indeterminate progress: a short segment of accent light sliding
-        // along a recessed track.
         const auto track = D2D1::RectF(170.0f, 268.0f, 430.0f, 274.0f);
         auto recess = Brush(wizard, p.recess);
         t->FillRoundedRectangle(Round(track, 3.0f), recess.Get());
+        if (!removing) {
+            // How far: the accent filling the track, what is being done and
+            // the percent under it.
+            const float right = track.left + (track.right - track.left) * wizard.shownProgress;
+            auto light = Brush(wizard, wizard.accent);
+            t->FillRoundedRectangle(Round(D2D1::RectF(track.left, track.top, std::max(right, track.left + 6.0f), track.bottom), 3.0f),
+                                    light.Get());
+            wchar_t percent[16]{};
+            swprintf_s(percent, L"%d%%", static_cast<int>(std::lround(wizard.shownProgress * 100.0f)));
+            DrawText(wizard, std::wstring(StageLabel(wizard)) + L"  " + percent, wizard.captionCentered.Get(),
+                     D2D1::RectF(0.0f, 284.0f, kWidth, 304.0f), p.ink2);
+            break;
+        }
+        // Uninstalling: a short segment of accent light sliding along the
+        // recessed track.
         const float span = track.right - track.left;
         const float segment = 84.0f;
         const float phase = std::fmod(wizard.animation, 1.0f);
@@ -1822,6 +1952,10 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     case WM_TIMER:
         if (wParam == kAnimationTimer) {
             wizard->animation += 0.016f / 1.4f;
+            if (wizard->screen == Screen::Installing) {
+                if (++wizard->progressPoll % 12 == 0) ReadProgress(*wizard);
+                UpdateProgress(*wizard);
+            }
             InvalidateRect(window, nullptr, FALSE);
             return 0;
         }
@@ -1858,6 +1992,9 @@ LRESULT CALLBACK WizardProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 // Preview build (tekito_setup_preview): opens one screen without elevation,
 // saves a screenshot of the window and exits.
 //   tekito_setup_preview.exe <screen> <out.bmp> [nowebview] [unchecked] [nojapanese] [nodownload] [ai] [stay]
+//                            [stage:<stage> done:<fraction>]
+// stage, done: the installing screen as install.ps1 told it (stage:download
+// done:0.42).
 // stay: keeps the screen open to try, with no screenshot.
 // screen: welcome | license | options | installing | done | failed
 //         | uninstall | uninstalling | uninstalled | uninstallfailed
@@ -1872,6 +2009,8 @@ struct PreviewRequest {
     // The AI model chosen; on the done screen, it could not be downloaded.
     bool ai{false};
     bool stay{false};
+    std::wstring stage;
+    double done{0.0};
 };
 PreviewRequest g_preview;
 
@@ -1991,6 +2130,12 @@ bool ShowWizard(const std::filesystem::path& self, const std::filesystem::path& 
     }
     KillTimer(window, kAnimationTimer);
     wizard.animation = 0.35f;
+    if (!g_preview.stage.empty()) {
+        wizard.installStep.store(kStepData);
+        wizard.progressStage = g_preview.stage;
+        wizard.progressDone = g_preview.done;
+        UpdateProgress(wizard);
+    }
     InvalidateRect(window, nullptr, FALSE);
     UpdateWindow(window);
     Sleep(200);
@@ -2041,6 +2186,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             if (std::wstring_view(argv[i]) == L"nodownload") g_preview.noDownload = true;
             if (std::wstring_view(argv[i]) == L"stay") g_preview.stay = true;
             if (std::wstring_view(argv[i]) == L"ai") g_preview.ai = true;
+            if (std::wstring_view(argv[i]).starts_with(L"stage:")) g_preview.stage = argv[i] + 6;
+            if (std::wstring_view(argv[i]).starts_with(L"done:")) g_preview.done = _wtof(argv[i] + 5);
         }
     }
     LocalFree(argv);
